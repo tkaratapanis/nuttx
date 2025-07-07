@@ -45,10 +45,11 @@
  * Public Types
  ****************************************************************************/
 
+/* Do I need a mutex here?*/
 struct optee_priv_data
 {
   uintptr_t alignment;        /* Transport-specified message alignment */
-  FAR struct idr_s *shms;     /* An RB tree of all shm entries */
+  FAR struct idr_s *dev_shms;     /* An RB tree of all shm entries */
 };
 
 struct optee_shm
@@ -56,7 +57,8 @@ struct optee_shm
   FAR struct optee_priv_data *priv;
   int fd;
   int32_t id;
-  uint64_t addr;
+  uint64_t vaddr;
+  uint64_t paddr;
   uint64_t length;
   FAR void *page_list;
   uint32_t flags;
