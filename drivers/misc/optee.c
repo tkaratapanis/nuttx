@@ -44,6 +44,7 @@
 #endif
 
 #include "optee.h"
+#include "optee_private.h"
 
 /****************************************************************************
  * The driver's main purpose is to support the porting of the open source
@@ -57,23 +58,8 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Some GlobalPlatform error codes used in this driver */
-
-#define TEE_SUCCESS                    0x00000000
-#define TEE_ERROR_ACCESS_DENIED        0xFFFF0001
-#define TEE_ERROR_BAD_FORMAT           0xFFFF0005
-#define TEE_ERROR_BAD_PARAMETERS       0xFFFF0006
-#define TEE_ERROR_NOT_SUPPORTED        0xFFFF000A
-#define TEE_ERROR_OUT_OF_MEMORY        0xFFFF000C
-#define TEE_ERROR_BUSY                 0xFFFF000D
-#define TEE_ERROR_COMMUNICATION        0xFFFF000E
-#define TEE_ERROR_SECURITY             0xFFFF000F
-#define TEE_ERROR_SHORT_BUFFER         0xFFFF0010
-#define TEE_ERROR_TIMEOUT              0xFFFF3001
-
-#define TEE_ORIGIN_COMMS               0x00000002
-
 #define OPTEE_DEV_PATH                 "/dev/tee0"
+#define OPTEE_SUPPLICANT_DEV_PATH      "/dev/tee-supp0"
 
 /* According to optee_msg.h#OPTEE_MSG_ATTR_NONCONTIG */
 
@@ -516,6 +502,7 @@ static int optee_shm_close(FAR struct file *filep)
 static int optee_open(FAR struct file *filep)
 {
   FAR struct optee_priv_data *priv;
+  enum optee_role_e role = (uintptr_t)filep->f_inode->i_private;
   int ret;
 
   ret = optee_transport_open(&priv);
@@ -524,8 +511,8 @@ static int optee_open(FAR struct file *filep)
       return ret;
     }
 
-  //priv->dev_shms = idr_init();
-  priv->dev_shms = dev_shms;
+  priv->role = role;
+  priv->shms = idr_init();
   filep->f_priv = priv;
   return 0;
 }
@@ -551,7 +538,7 @@ static int optee_close(FAR struct file *filep)
   FAR struct file *shm_filep;
   int id = 0;
 
-  idr_for_each_entry(priv->dev_shms, shm, id)
+  idr_for_each_entry(priv->shms, shm, id)
     {
       if (shm->fd > -1 && file_get(shm->fd, &shm_filep) >= 0)
         {
@@ -566,7 +553,7 @@ static int optee_close(FAR struct file *filep)
       optee_shm_free(shm);
     }
 
-  //idr_destroy(priv->dev_shms);
+  idr_destroy(priv->shms);
   optee_transport_close(priv);
   return 0;
 }
@@ -588,10 +575,16 @@ static int optee_memref_to_msg_param(FAR struct optee_priv_data *priv,
       return 0;
     }
 
-  shm = idr_find(priv->dev_shms, p->c);
+  shm = idr_find(priv->shms, p->c);
   if (shm == NULL)
     {
-      return -EINVAL;
+      /* Search also the shared memory registered by the supplicant. */
+      shm = idr_find(optee_supplicant_get_shm_idr(), p->c);
+
+      if (shm == NULL)
+        {
+          return -EINVAL;
+        }
     }
 
   if (shm->flags & TEE_SHM_REGISTER)
@@ -1036,6 +1029,46 @@ err:
 }
 
 static int
+optee_shm_register_supplicant(uintptr_t addr, uint64_t length,
+                              FAR struct optee_shm **shmp)
+{
+  FAR struct optee_shm *shm;
+  uintptr_t page_list_pa;
+  int ret = 0;
+
+  shm = kmm_zalloc(sizeof(struct optee_shm));
+  *shmp = shm;
+  if (shm == NULL)
+    {
+      return -ENOMEM;
+    }
+
+  shm->vaddr = addr;
+  shm->length = length;
+  shm->flags = TEE_SHM_REGISTER | TEE_SHM_SUPP;
+
+  /* Do this here, which is the supplicant context, and the shm will be used.
+   * If we do it before the rpc return we will run in the context of the CA and
+   * the virtual addresses will be different.
+   */
+  shm->page_list = optee_shm_to_page_list(shm, &page_list_pa);
+  shm->paddr = page_list_pa;
+  usleep(1000);
+  _alert("[%s], line %u, Physical addr of rdata->addr (%lx) is %lx\n", __func__, __LINE__, addr, optee_va_to_pa((void *)addr));
+  usleep(1000);
+
+  shm->id = idr_alloc(optee_supplicant_get_shm_idr(), shm, 0, 0);
+  if (shm->id < 0) {
+    kmm_free(shm->page_list);
+    kmm_free(shm);
+    return -ENOMEM;
+  }
+
+  return ret;
+}
+
+
+static int
 optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
                          FAR struct tee_ioctl_shm_register_data *rdata)
 {
@@ -1058,8 +1091,27 @@ optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
       return -EINVAL;
     }
 
-  ret = optee_shm_alloc(priv, (FAR void *)(uintptr_t)rdata->addr,
-                        rdata->length, TEE_SHM_REGISTER, &shm);
+  if (priv->role == OPTEE_ROLE_CA)
+    {
+      usleep(1000);
+      _alert("[%s], OPTEE_ROLE_CA line %u\n", __func__, __LINE__);
+      usleep(1000);
+      ret = optee_shm_alloc(priv, (FAR void *)(uintptr_t)rdata->addr,
+                            rdata->length, TEE_SHM_REGISTER, &shm);
+    }
+  else if (priv->role == OPTEE_ROLE_SUPPLICANT)
+    {
+      usleep(1000);
+      _alert("[%s], OPTEE_ROLE_SUPPLICANT line %u\n", __func__, __LINE__);
+      usleep(1000);
+      ret = optee_shm_register_supplicant((uintptr_t)rdata->addr, rdata->length, &shm);
+      rdata->flags = shm->flags;
+    }
+  else
+    {
+      return -ENODEV;
+    }
+
   if (ret < 0)
     {
       return ret;
@@ -1074,75 +1126,6 @@ optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
 
   shm->fd = ret;
   rdata->id = shm->id;
-  return ret;
-}
-
-static int
-optee_ioctl_shm_register_supp(FAR struct optee_priv_data *priv,
-                         FAR struct tee_ioctl_shm_register_data *rdata)
-{
-  FAR struct optee_shm *shm;
-  uintptr_t page_list_pa;
-  int ret;
-
-  if (!optee_is_valid_range(rdata, sizeof(*rdata)))
-    {
-      return -EFAULT;
-    }
-
-  if (!optee_is_valid_range((FAR void *)(uintptr_t)
-                            rdata->addr, rdata->length))
-    {
-      return -EFAULT;
-    }
-
-  if (rdata->flags)
-    {
-      return -EINVAL;
-    }
-
-  shm = kmm_zalloc(sizeof(struct optee_shm));
-  if (shm == NULL)
-    {
-      return -ENOMEM;
-    }
-
-  shm->priv = priv;
-  shm->vaddr = (uintptr_t)rdata->addr;
-  shm->length = rdata->length;
-  shm->flags = TEE_SHM_REGISTER | TEE_SHM_SUPP;
-
-  /* Do this here, which is the supplicant context, and the shm will be used.
-   * If we do it before the rpc return we will run in the context of the CA and
-   * the virtual addresses will be different.
-   */
-  shm->page_list = optee_shm_to_page_list(shm, &page_list_pa);
-  shm->paddr = page_list_pa;
-  usleep(1000);
-  _alert("[%s], line %u, Physical addr of rdata->addr (%lx) is %lx\n", __func__, __LINE__, rdata->addr, optee_va_to_pa((void *)rdata->addr));
-  usleep(1000);
-
-  shm->id = idr_alloc(dev_shms, shm, 0, 0);
-  if (shm->id < 0) {
-    kmm_free(shm->page_list);
-    kmm_free(shm);
-    return -ENOMEM;
-  }
-
-  ret = file_allocate_from_inode(&g_optee_shm_inode, O_CLOEXEC, 0, shm, 0);
-  if (ret < 0)
-    {
-      optee_shm_free(shm);
-      return ret;
-    }
-  shm->fd = ret;
-
-  usleep(10000);
-  _alert("[%s],aaaaaaaaaaaaaaaaa id is [%u], size is [%lu], shm_ref is [%lx]", __func__, shm->id, shm->length, (uintptr_t)shm);
-  usleep(10000);
-
-  rdata->id = shm->id;
-  rdata->flags = shm->flags;
   return ret;
 }
 
@@ -1324,8 +1307,6 @@ static int optee_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         return optee_ioctl_shm_alloc(priv, parg);
       case TEE_IOC_SHM_REGISTER:
         return optee_ioctl_shm_register(priv, parg);
-      case TEE_IOC_SHM_REGISTER_SUPP:
-        return optee_ioctl_shm_register_supp(priv, parg);
       case TEE_IOC_SUPPL_RECV:
         return optee_ioctl_supp_recv(priv, parg);
       case TEE_IOC_SUPPL_SEND:
@@ -1455,7 +1436,15 @@ int optee_shm_alloc(FAR struct optee_priv_data *priv, FAR void *addr,
   shm->paddr = optee_va_to_pa((void *)shm->vaddr);
   shm->length = size;
   shm->flags = flags;
-  shm->id = idr_alloc(priv->dev_shms, shm, 0, 0);
+
+  if (priv->role == OPTEE_ROLE_CA)
+    {
+      shm->id = idr_alloc(priv->shms, shm, 0, 0);
+    }
+  else
+    {
+      shm->id = idr_alloc(optee_supplicant_get_shm_idr(), shm, 0, 0);
+    }
 
   if (shm->id < 0)
     {
@@ -1475,7 +1464,7 @@ int optee_shm_alloc(FAR struct optee_priv_data *priv, FAR void *addr,
   return 0;
 
 err_with_idr:
-  idr_remove(priv->dev_shms, shm->id);
+  idr_remove(priv->shms, shm->id);
 err:
   kmm_free(shm);
   if (flags & TEE_SHM_ALLOC)
@@ -1525,7 +1514,7 @@ void optee_shm_free(FAR struct optee_shm *shm)
       munmap((FAR void *)(uintptr_t)shm->vaddr, shm->length);
     }
 
-  idr_remove(shm->priv->dev_shms, shm->id);
+  idr_remove(shm->priv->shms, shm->id);
   kmm_free(shm);
 }
 
@@ -1553,6 +1542,13 @@ int optee_register(void)
 
   dev_shms = idr_init();
   optee_supp_init();
+  ret = register_driver(OPTEE_SUPPLICANT_DEV_PATH, &g_optee_ops, 0666,
+                       (void*)OPTEE_ROLE_SUPPLICANT);
 
-  return register_driver(OPTEE_DEV_PATH, &g_optee_ops, 0666, NULL);
+  if (ret)
+    {
+      return ret;
+    }
+
+  return register_driver(OPTEE_DEV_PATH, &g_optee_ops, 0666, (void *)OPTEE_ROLE_CA);
 }

@@ -45,11 +45,18 @@
  * Public Types
  ****************************************************************************/
 
+enum optee_role_e
+{
+  OPTEE_ROLE_CA,             /* /dev/tee0   */
+  OPTEE_ROLE_SUPPLICANT,     /* /dev/tee-supp0 */
+};
+
 /* Do I need a mutex here?*/
 struct optee_priv_data
 {
   uintptr_t alignment;        /* Transport-specified message alignment */
-  FAR struct idr_s *dev_shms;     /* An RB tree of all shm entries */
+  FAR struct idr_s *shms;     /* An RB tree of process local shm entries */
+  enum optee_role_e role;
 };
 
 struct optee_shm

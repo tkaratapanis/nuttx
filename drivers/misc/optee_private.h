@@ -31,16 +31,22 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Some Global Platform error codes used in this driver. */
-#define TEE_SUCCESS              0x00000000
-#define TEE_ERROR_GENERIC        0xFFFF0000
-#define TEE_ERROR_BAD_PARAMETERS 0xFFFF0006
-#define TEE_ERROR_NOT_SUPPORTED  0xFFFF000A
-#define TEE_ERROR_COMMUNICATION  0xFFFF000E
-#define TEE_ERROR_OUT_OF_MEMORY  0xFFFF000C
-#define TEE_ERROR_SHORT_BUFFER   0xFFFF0010
+/* Some GlobalPlatform error codes used in this driver */
 
-#define TEE_ORIGIN_COMMS   0x00000002
+#define TEE_SUCCESS                    0x00000000
+#define TEE_ERROR_ACCESS_DENIED        0xFFFF0001
+#define TEE_ERROR_BAD_FORMAT           0xFFFF0005
+#define TEE_ERROR_BAD_PARAMETERS       0xFFFF0006
+#define TEE_ERROR_GENERIC              0xFFFF0000
+#define TEE_ERROR_NOT_SUPPORTED        0xFFFF000A
+#define TEE_ERROR_OUT_OF_MEMORY        0xFFFF000C
+#define TEE_ERROR_BUSY                 0xFFFF000D
+#define TEE_ERROR_COMMUNICATION        0xFFFF000E
+#define TEE_ERROR_SECURITY             0xFFFF000F
+#define TEE_ERROR_SHORT_BUFFER         0xFFFF0010
+#define TEE_ERROR_TIMEOUT              0xFFFF3001
+
+#define TEE_ORIGIN_COMMS               0x00000002
 
 
 void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
@@ -65,4 +71,5 @@ void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
 int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
   size_t sz, struct optee_shm **shm);
 
+FAR struct idr_s * optee_supplicant_get_shm_idr(void);
 #endif /*OPTEE_PRIVATE_H*/

@@ -361,10 +361,10 @@ static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
 	switch (arg->params[0].u.value.a) {
 	case OPTEE_MSG_RPC_SHM_TYPE_APPL:
 		optee_rpc_cmd_free_suppl(shm->id);
-    idr_remove(priv->dev_shms, shm->id);
+    idr_remove(optee_supplicant_get_shm_idr(), shm->id);
 		break;
 	case OPTEE_MSG_RPC_SHM_TYPE_KERNEL:
-    idr_remove(priv->dev_shms, shm->id);
+    idr_remove(priv->shms, shm->id);
     kmm_free((void *)shm->vaddr);
     kmm_free(shm);
 		break;
