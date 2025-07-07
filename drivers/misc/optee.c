@@ -59,7 +59,7 @@
  ****************************************************************************/
 
 #define OPTEE_DEV_PATH                 "/dev/tee0"
-#define OPTEE_SUPPLICANT_DEV_PATH      "/dev/tee-supp0"
+#define OPTEE_SUPPLICANT_DEV_PATH      "/dev/teepriv0"
 
 /* According to optee_msg.h#OPTEE_MSG_ATTR_NONCONTIG */
 
@@ -1150,13 +1150,11 @@ optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
 }
 
 static
-int optee_ioctl_supp_recv(FAR struct optee_priv_data *priv,
+int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
                struct tee_ioctl_buf_data  *data)
 {
   int ret;
   struct tee_iocl_supp_recv_arg *arg;
-  //struct tee_param *params;
-  //uint32_t func;
 
   if (!optee_is_valid_range(data, sizeof(*data)))
     {
@@ -1199,7 +1197,7 @@ int optee_ioctl_supp_recv(FAR struct optee_priv_data *priv,
   //  return -ENOMEM;
 
 
-  ret = optee_supp_recv(&arg->func, &arg->num_params, arg->params);
+  ret = optee_supplicant_recv(&arg->func, &arg->num_params, arg->params);
   for (int n = 0; n < arg->num_params; n++) {
   		struct tee_ioctl_param *p = arg->params + n;
   
@@ -1234,7 +1232,7 @@ out:
 }
 
 static
-int optee_ioctl_supp_send(FAR struct optee_priv_data *priv,
+int optee_ioctl_supplicant_send(FAR struct optee_priv_data *priv,
                struct tee_ioctl_buf_data  *data)
 {
   int ret;
@@ -1281,7 +1279,7 @@ int optee_ioctl_supp_send(FAR struct optee_priv_data *priv,
   //  return -ENOMEM;
 
 
-  ret = optee_supp_send(arg->ret, arg->num_params, arg->params);
+  ret = optee_supplicant_send(arg->ret, arg->num_params, arg->params);
   if (ret)
     goto out;
 
@@ -1328,9 +1326,9 @@ static int optee_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
       case TEE_IOC_SHM_REGISTER:
         return optee_ioctl_shm_register(priv, parg);
       case TEE_IOC_SUPPL_RECV:
-        return optee_ioctl_supp_recv(priv, parg);
+        return optee_ioctl_supplicant_recv(priv, parg);
       case TEE_IOC_SUPPL_SEND:
-        return optee_ioctl_supp_send(priv, parg);
+        return optee_ioctl_supplicant_send(priv, parg);
       default:
         return -ENOTTY;
     }
@@ -1561,7 +1559,7 @@ int optee_register(void)
     }
 
   dev_shms = idr_init();
-  optee_supp_init();
+  optee_supplicant_init();
   ret = register_driver(OPTEE_SUPPLICANT_DEV_PATH, &g_optee_ops, 0666,
                        (void*)OPTEE_ROLE_SUPPLICANT);
 

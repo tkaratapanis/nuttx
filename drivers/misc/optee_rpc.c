@@ -163,7 +163,7 @@ static void optee_rpc_cmd_supplicant(struct optee_msg_arg *arg)
   }
   _alert("[%s], line %u\n", __func__, __LINE__);
 
-  arg->ret = optee_supp_thrd_req(arg->cmd, arg->num_params, params);
+  arg->ret = optee_supplicant_request(arg->cmd, arg->num_params, params);
 
   //memcpy(arg->params, params, sizeof(struct optee_msg_param));
   //if (optee_to_msg_param(priv, arg->params, arg->num_params, params))
@@ -322,7 +322,7 @@ static void optee_rpc_cmd_free_suppl(int32_t shm_id)
 	 * happen if secure world does many allocate and free in a single
 	 * invoke.
 	 */
-	optee_supp_thrd_req(OPTEE_MSG_RPC_CMD_SHM_FREE, 1, &param);
+	optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_FREE, 1, &param);
 }
 
 /****************************************************************************

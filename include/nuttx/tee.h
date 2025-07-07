@@ -382,7 +382,7 @@ struct tee_iocl_supp_send_arg
 
 #define TEE_SHM_ALLOC    (1 << 0) /* Kernel-malloced and must freed */
 #define TEE_SHM_REGISTER (1 << 1) /* Registered with TEE OS */
-#define TEE_SHM_SUPP (1 << 4)     /* Registered by  supplicant */
+#define TEE_SHM_SUPP (1 << 4)     /* Registered by supplicant */
 
 /* struct tee_ioctl_shm_register_data - Shared memory register argument
  * addr:      [in] Start address of shared memory to register
@@ -437,7 +437,6 @@ struct tee_ioctl_buf_data
  */
 
 #define TEE_IOC_SHM_REGISTER   _IOC(TEE_IOC_MAGIC << 8, TEE_IOC_BASE + 9)
-#define TEE_IOC_SHM_REGISTER_SUPP   _IOC(TEE_IOC_MAGIC << 8, TEE_IOC_BASE + 10)
 
 /* Five syscalls are used when communicating with the TEE driver.
  * open(): opens the device associated with the driver
