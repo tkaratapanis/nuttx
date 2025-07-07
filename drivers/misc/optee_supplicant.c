@@ -121,7 +121,6 @@ void optee_supp_init(void)
   nxsem_init(&supp.reqs_c, 0, 0);
   sq_init(&supp.reqs);
   supp.idr = idr_init();
-  supp.shm_idr = idr_init();
   supp.req_id = -1;
 }
 
@@ -130,7 +129,6 @@ void optee_supp_uninit(void)
   nxmutex_destroy(&supp.mutex);
   nxsem_destroy(&supp.reqs_c);
   idr_destroy(supp.idr);
-  idr_destroy(supp.shm_idr);
 }
 
 uint32_t optee_supp_thrd_req(uint32_t func, size_t num_params,
@@ -379,6 +377,12 @@ int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
 
 FAR struct idr_s *optee_supplicant_get_shm_idr(void)
 {
+  return supp.shm_idr;
+}
+
+FAR struct idr_s *optee_supplicant_init_shm_idr(void)
+{
+  supp.shm_idr = idr_init();
   return supp.shm_idr;
 }
 

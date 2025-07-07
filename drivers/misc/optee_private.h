@@ -72,4 +72,5 @@ int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
   size_t sz, struct optee_shm **shm);
 
 FAR struct idr_s * optee_supplicant_get_shm_idr(void);
+FAR struct idr_s *optee_supplicant_init_shm_idr(void);
 #endif /*OPTEE_PRIVATE_H*/

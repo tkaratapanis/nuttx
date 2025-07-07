@@ -512,7 +512,27 @@ static int optee_open(FAR struct file *filep)
     }
 
   priv->role = role;
-  priv->shms = idr_init();
+
+  if (role == OPTEE_ROLE_CA)
+    {
+      priv->shms = idr_init();
+    }
+  else if (role == OPTEE_ROLE_SUPPLICANT)
+    {
+      /* Allow only one process to open the device. */
+
+      if (filep->f_inode->i_crefs > 2)
+        {
+          return -EBUSY;
+        }
+      priv->shms = optee_supplicant_init_shm_idr();
+
+    }
+  else
+    {
+      return -EOPNOTSUPP;
+    }
+
   filep->f_priv = priv;
   return 0;
 }
