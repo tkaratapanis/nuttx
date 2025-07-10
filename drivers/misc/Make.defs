@@ -77,6 +77,7 @@ endif
 
 ifneq ($(CONFIG_DEV_OPTEE_NONE),y)
   CSRCS += optee.c
+  CFLAGS += -I$(TOPDIR)/fs/mmap
   ifeq ($(CONFIG_DEV_OPTEE_SMC),y)
     CSRCS += optee_smc.c
     CSRCS += optee_rpc.c

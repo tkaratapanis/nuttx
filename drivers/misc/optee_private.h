@@ -71,8 +71,20 @@ void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
 int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
   size_t sz, struct optee_shm **shm);
 
-FAR struct idr_s * optee_supplicant_get_shm_idr(void);
+FAR struct idr_s *optee_supplicant_get_shm_idr(void);
 FAR struct idr_s *optee_supplicant_init_shm_idr(void);
+bool optee_supplicant_running(void);
 
 void optee_supplicant_init(void);
+void optee_supplicant_uninit(void);
+int optee_convert_error(uint32_t oterr);
+
+uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
+                             FAR struct tee_ioctl_param *param);
+
+int optee_supplicant_send(uint32_t ret, uint32_t num_params,
+                    FAR struct tee_ioctl_param *param);
+
+int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
+                    FAR struct tee_ioctl_param *params);
 #endif /*OPTEE_PRIVATE_H*/

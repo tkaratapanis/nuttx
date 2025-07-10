@@ -51,7 +51,6 @@ enum optee_role_e
   OPTEE_ROLE_SUPPLICANT,     /* /dev/tee-supp0 */
 };
 
-/* Do I need a mutex here?*/
 struct optee_priv_data
 {
   uintptr_t alignment;        /* Transport-specified message alignment */

@@ -232,6 +232,7 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv, struct opt
 	struct optee_shm *shm;
   size_t n;
   size_t sz;
+  int32_t ret = OK;
 
 	arg->ret_origin = TEE_ORIGIN_COMMS;
 
@@ -255,14 +256,30 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv, struct opt
   switch (arg->params[0].u.value.a)
     {
       case OPTEE_MSG_RPC_SHM_TYPE_APPL:
-        optee_supplicant_cmd_alloc(priv, sz, &shm);
+        ret = optee_supplicant_cmd_alloc(priv, sz, &shm);
         break;
       case OPTEE_MSG_RPC_SHM_TYPE_KERNEL:
-        optee_shm_alloc(priv, NULL , sz, TEE_SHM_ALLOC, &shm);
+        ret = optee_shm_alloc(priv, NULL , sz, TEE_SHM_ALLOC, &shm);
         break;
       default:
         arg->ret = TEE_ERROR_BAD_PARAMETERS;
         return;
+    }
+
+  if (ret == -ENOMEM)
+    {
+      arg->ret = TEE_ERROR_OUT_OF_MEMORY;
+      return;
+    }
+  else if (ret == -ENODEV)
+    {
+      arg->ret = TEE_ERROR_COMMUNICATION;
+      return;
+    }
+  else if ( ret != OK)
+    {
+      arg->ret = TEE_ERROR_GENERIC;
+      return;
     }
 
   if (shm->flags | TEE_SHM_REGISTER)
@@ -288,7 +305,7 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv, struct opt
 }
 
 /****************************************************************************
- * Name: optee_rpc_cmd_free_suppl
+ * Name: optee_rpc_cmd_free_supplicant
  *
  * Description:
  *   Request from OP-TEE to suspend the current nuttx process.
@@ -297,11 +314,11 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv, struct opt
  *   shm_id - The id of the shared memory to be freed.
  *
  * Returned Value:
- *   None.
+ *   TEE_SUCCESS on success or a global platform api error code on failure.
  *
  ****************************************************************************/
 
-static void optee_rpc_cmd_free_suppl(int32_t shm_id)
+static uint32_t optee_rpc_cmd_free_supplicant(int32_t shm_id)
 {
 	struct tee_ioctl_param param;
 
@@ -311,18 +328,7 @@ static void optee_rpc_cmd_free_suppl(int32_t shm_id)
 	param.c = 0;
   _alert("[cmd_free_suppl]!!! The id is %u", shm_id);
 
-	/*
-	 * Match the tee_shm_get_from_id() in cmd_alloc_suppl() as secure
-	 * world has released its reference.
-	 *
-	 * It's better to do this before sending the request to supplicant
-	 * as we'd like to let the process doing the initial allocation to
-	 * do release the last reference too in order to avoid stacking
-	 * many pending fput() on the client process. This could otherwise
-	 * happen if secure world does many allocate and free in a single
-	 * invoke.
-	 */
-	optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_FREE, 1, &param);
+	return optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_FREE, 1, &param);
 }
 
 /****************************************************************************
@@ -349,10 +355,11 @@ static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
 	arg->ret_origin = TEE_ORIGIN_COMMS;
 
 	if (arg->num_params != 1 ||
-	    arg->params[0].attr != OPTEE_MSG_ATTR_TYPE_VALUE_INPUT) {
-		arg->ret = TEE_ERROR_BAD_PARAMETERS;
-		return;
-	}
+	    arg->params[0].attr != OPTEE_MSG_ATTR_TYPE_VALUE_INPUT)
+    {
+      arg->ret = TEE_ERROR_BAD_PARAMETERS;
+      return;
+    }
 
 	shm = (struct optee_shm *)(unsigned long)arg->params[0].u.value.b;
   usleep(1000);
@@ -360,18 +367,18 @@ static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
   usleep(1000);
 	switch (arg->params[0].u.value.a) {
 	case OPTEE_MSG_RPC_SHM_TYPE_APPL:
-		optee_rpc_cmd_free_suppl(shm->id);
+		arg->ret = optee_rpc_cmd_free_supplicant(shm->id);
     idr_remove(optee_supplicant_get_shm_idr(), shm->id);
 		break;
 	case OPTEE_MSG_RPC_SHM_TYPE_KERNEL:
     idr_remove(priv->shms, shm->id);
     kmm_free((void *)shm->vaddr);
     kmm_free(shm);
+    arg->ret = TEE_SUCCESS;
 		break;
 	default:
 		arg->ret = TEE_ERROR_BAD_PARAMETERS;
 	}
-	arg->ret = TEE_SUCCESS;
 }
 
 /****************************************************************************
@@ -382,7 +389,7 @@ static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
  * Name: optee_rpc_handle_cmd
  *
  * Description:
- *   Request from OP-TEE to suspend the current nuttx process.
+ *   Handle RPC requests from OP-TEE
  *
  * Input Parameters:
  *   shm  - Contains a pointer to the RPC message argument, allocated in the
@@ -400,13 +407,13 @@ void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
 {
   struct optee_msg_arg *arg;
 
-  if ((0 == shm) /*|| (0 == shm->flags & TEE_SHM_MAPPED), all should be kernel allocated*/)
+  if (0 == shm)
     {
       _err("[%s] shm error.\n", __func__);
       return;
     }
 
-  arg = shm->vaddr;
+  arg = (struct optee_msg_arg *)shm->vaddr;
 
   usleep(1000);
   _alert("RPC invoked with %u", arg->cmd);

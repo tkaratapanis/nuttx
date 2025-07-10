@@ -36,6 +36,9 @@
 #include <sys/mman.h>
 #include <sys/param.h>
 #include <debug.h>
+#include "fs_anonmap.h"
+#include "fs_rammap.h"
+#include <nuttx/atomic.h>
 
 #ifdef CONFIG_ARCH_ADDRENV
 #  include <nuttx/pgalloc.h>
@@ -125,7 +128,6 @@ struct optee_page_list_entry
 /****************************************************************************
  * Private Function Prototypes
  ****************************************************************************/
- static FAR struct idr_s *dev_shms;
 
 /* The file operation functions */
 
@@ -135,6 +137,8 @@ static int optee_ioctl(FAR struct file *filep, int cmd,
                        unsigned long arg);
 
 static int optee_shm_close(FAR struct file *filep);
+static int optee_shm_mmap(FAR struct file *filep,
+                          FAR struct mm_map_entry_s *map);
 
 /****************************************************************************
  * Private Data
@@ -157,15 +161,8 @@ static const struct file_operations g_optee_ops =
 
 static const struct file_operations g_optee_shm_ops =
 {
-  NULL,            /* open */
-  optee_shm_close, /* close */
-  NULL,            /* read */
-  NULL,            /* write */
-  NULL,            /* seek */
-  NULL,            /* ioctl */
-  NULL,            /* mmap */
-  NULL,            /* truncate */
-  NULL             /* poll */
+  .close = optee_shm_close,
+  .mmap = optee_shm_mmap,
 };
 
 static struct inode g_optee_shm_inode =
@@ -178,35 +175,6 @@ static struct inode g_optee_shm_inode =
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
-
-static int optee_convert_error(uint32_t oterr)
-{
-  switch (oterr)
-    {
-      case TEE_SUCCESS:
-        return 0;
-      case TEE_ERROR_ACCESS_DENIED:
-      case TEE_ERROR_SECURITY:
-        return -EACCES;
-      case TEE_ERROR_BAD_FORMAT:
-      case TEE_ERROR_BAD_PARAMETERS:
-        return -EINVAL;
-      case TEE_ERROR_NOT_SUPPORTED:
-        return -EOPNOTSUPP;
-      case TEE_ERROR_OUT_OF_MEMORY:
-        return -ENOMEM;
-      case TEE_ERROR_BUSY:
-        return -EBUSY;
-      case TEE_ERROR_COMMUNICATION:
-        return -ECOMM;
-      case TEE_ERROR_SHORT_BUFFER:
-        return -ENOBUFS;
-      case TEE_ERROR_TIMEOUT:
-        return -ETIMEDOUT;
-      default:
-        return -EIO;
-    }
-}
 
 /****************************************************************************
  * Name: optee_is_valid_range
@@ -478,11 +446,49 @@ static int optee_shm_close(FAR struct file *filep)
   if (shm != NULL && shm->id > -1)
     {
       filep->f_priv = NULL;
-      shm->fd = -1;
       optee_shm_free(shm);
     }
 
   return 0;
+}
+
+/****************************************************************************
+ * Name: optee_shm_mmap
+ *
+ * Description:
+ *   shm mmap operation
+ *
+ * Parameters:
+ *   filep  - the file instance
+ *   map    - Filled by the userspace, with the mapping parameters.
+ *
+ * Returned Values:
+ *   OK on success; A negated errno value is returned on any failure.
+ *
+ ****************************************************************************/
+
+static int optee_shm_mmap(FAR struct file *filep, FAR struct mm_map_entry_s *map)
+{
+
+  struct optee_shm *shm = filep->f_priv;
+  int32_t ret = OK;
+
+  if ((map->flags & MAP_PRIVATE) && (map->flags & MAP_SHARED))
+    {
+      return -EINVAL;
+    }
+
+  ret = map_anonymous(map, MAP_USER);
+
+  if (ret == OK)
+    {
+      DEBUGASSERT(map->vaddr != NULL);
+      memset(map->vaddr, 0, map->length);
+      shm->vaddr = (uint64_t)map->vaddr;
+      shm->paddr = optee_va_to_pa(map->vaddr);
+    }
+
+  return ret;
 }
 
 /****************************************************************************
@@ -525,8 +531,8 @@ static int optee_open(FAR struct file *filep)
         {
           return -EBUSY;
         }
-      priv->shms = optee_supplicant_init_shm_idr();
-
+      optee_supplicant_init();
+      priv->shms = optee_supplicant_get_shm_idr();
     }
   else
     {
@@ -554,27 +560,28 @@ static int optee_open(FAR struct file *filep)
 static int optee_close(FAR struct file *filep)
 {
   FAR struct optee_priv_data *priv = filep->f_priv;
+  enum optee_role_e role = (uintptr_t)filep->f_inode->i_private;
   FAR struct optee_shm *shm;
-  FAR struct file *shm_filep;
   int id = 0;
 
   idr_for_each_entry(priv->shms, shm, id)
     {
-      if (shm->fd > -1 && file_get(shm->fd, &shm_filep) >= 0)
+      /* Here, we only free kernel allocations, the rest will be done by
+       * optee_shm_close().
+       */
+
+      if (shm->fd == -1)
         {
-          /* The user did not call close(), prevent vfs auto-close from
-           * double-freeing our SHM
-           */
-
-          shm_filep->f_priv = NULL;
-          file_put(shm_filep);
+          optee_shm_free(shm);
         }
-
-      optee_shm_free(shm);
     }
 
   idr_destroy(priv->shms);
   optee_transport_close(priv);
+  if (role == OPTEE_ROLE_SUPPLICANT)
+    {
+      optee_supplicant_uninit();
+    }
   return 0;
 }
 
@@ -1003,8 +1010,6 @@ optee_ioctl_shm_alloc(FAR struct optee_priv_data *priv,
                       FAR struct tee_ioctl_shm_alloc_data *data)
 {
   FAR struct optee_shm *shm;
-  FAR void *addr;
-  int memfd;
   int ret;
 
   if (!optee_is_valid_range(data, sizeof(*data)))
@@ -1012,44 +1017,36 @@ optee_ioctl_shm_alloc(FAR struct optee_priv_data *priv,
       return -EFAULT;
     }
 
-  memfd = memfd_create(OPTEE_SERVER_PATH, O_CREAT | O_CLOEXEC);
-  if (memfd < 0)
-    {
-      return get_errno();
-    }
-
-  if (ftruncate(memfd, data->size) < 0)
-    {
-      ret = get_errno();
-      goto err;
-    }
-
-  addr = mmap(NULL, data->size, PROT_READ | PROT_WRITE, MAP_SHARED,
-              memfd, 0);
-  if (addr == MAP_FAILED)
-    {
-      ret = get_errno();
-      goto err;
-    }
-
-  ret = optee_shm_alloc(priv, addr, data->size, 0, &shm);
+  usleep(1000);
+  _alert("[%s], line IS %u", __func__, __LINE__);
+  usleep(1000);
+  ret = optee_shm_alloc(priv, 0, data->size, TEE_SHM_USER_MAP, &shm);
   if (ret < 0)
     {
-      goto err_with_mmap;
+      return ret;
     }
 
-  data->id = shm->id;
-  return memfd;
+  ret = file_allocate_from_inode(&g_optee_shm_inode, O_CLOEXEC | O_RDOK, 0, shm, 0);
+  /* Will free automatically the shm once the descriptor is closed. */
 
-err_with_mmap:
-  munmap(addr, data->size);
-err:
-  close(memfd);
-  return ret;
+  usleep(1000);
+  _alert("[%s], RET IS %d", __func__, ret);
+  usleep(1000);
+  if (ret < 0)
+    {
+      optee_shm_free(shm);
+      return ret;
+    }
+
+  shm->fd = ret;
+
+  data->id = shm->id;
+  return shm->fd;
 }
 
 static int
-optee_shm_register_supplicant(uintptr_t addr, uint64_t length,
+optee_shm_register_supplicant(FAR struct optee_priv_data *priv,
+                              uintptr_t addr, uint64_t length,
                               FAR struct optee_shm **shmp)
 {
   FAR struct optee_shm *shm;
@@ -1063,26 +1060,23 @@ optee_shm_register_supplicant(uintptr_t addr, uint64_t length,
       return -ENOMEM;
     }
 
+  shm->fd = -1;
   shm->vaddr = addr;
   shm->length = length;
   shm->flags = TEE_SHM_REGISTER | TEE_SHM_SUPP;
-
-  /* Do this here, which is the supplicant context, and the shm will be used.
-   * If we do it before the rpc return we will run in the context of the CA and
-   * the virtual addresses will be different.
-   */
   shm->page_list = optee_shm_to_page_list(shm, &page_list_pa);
   shm->paddr = page_list_pa;
   usleep(1000);
   _alert("[%s], line %u, Physical addr of rdata->addr (%lx) is %lx\n", __func__, __LINE__, addr, optee_va_to_pa((void *)addr));
   usleep(1000);
 
-  shm->id = idr_alloc(optee_supplicant_get_shm_idr(), shm, 0, 0);
-  if (shm->id < 0) {
-    kmm_free(shm->page_list);
-    kmm_free(shm);
-    return -ENOMEM;
-  }
+  shm->id = idr_alloc(priv->shms, shm, 0, 0);
+  if (shm->id < 0)
+    {
+      kmm_free(shm->page_list);
+      kmm_free(shm);
+      return -ENOMEM;
+    }
 
   return ret;
 }
@@ -1113,18 +1107,12 @@ optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
 
   if (priv->role == OPTEE_ROLE_CA)
     {
-      usleep(1000);
-      _alert("[%s], OPTEE_ROLE_CA line %u\n", __func__, __LINE__);
-      usleep(1000);
       ret = optee_shm_alloc(priv, (FAR void *)(uintptr_t)rdata->addr,
                             rdata->length, TEE_SHM_REGISTER, &shm);
     }
   else if (priv->role == OPTEE_ROLE_SUPPLICANT)
     {
-      usleep(1000);
-      _alert("[%s], OPTEE_ROLE_SUPPLICANT line %u\n", __func__, __LINE__);
-      usleep(1000);
-      ret = optee_shm_register_supplicant((uintptr_t)rdata->addr, rdata->length, &shm);
+      ret = optee_shm_register_supplicant(priv, (uintptr_t)rdata->addr, rdata->length, &shm);
       rdata->flags = shm->flags;
     }
   else
@@ -1200,7 +1188,7 @@ int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
   ret = optee_supplicant_recv(&arg->func, &arg->num_params, arg->params);
   for (int n = 0; n < arg->num_params; n++) {
   		struct tee_ioctl_param *p = arg->params + n;
-  
+
   		switch (p->attr & TEE_IOCTL_PARAM_ATTR_TYPE_MASK) {
   		case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT:
   		case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT:
@@ -1344,6 +1332,50 @@ static int optee_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
  * Name: optee_va_to_pa
  *
  * Description:
+ *   Convert TEE errors to errno values
+ *
+ * Parameters:
+ *   oterr - TEE error code.
+ *
+ * Returned Values:
+ *   The converted errno value.
+ *
+ ****************************************************************************/
+
+int optee_convert_error(uint32_t oterr)
+{
+  switch (oterr)
+    {
+      case TEE_SUCCESS:
+        return 0;
+      case TEE_ERROR_ACCESS_DENIED:
+      case TEE_ERROR_SECURITY:
+        return -EACCES;
+      case TEE_ERROR_BAD_FORMAT:
+      case TEE_ERROR_BAD_PARAMETERS:
+        return -EINVAL;
+      case TEE_ERROR_NOT_SUPPORTED:
+        return -EOPNOTSUPP;
+      case TEE_ERROR_OUT_OF_MEMORY:
+        return -ENOMEM;
+      case TEE_ERROR_BUSY:
+        return -EBUSY;
+      case TEE_ERROR_COMMUNICATION:
+        return -ECOMM;
+      case TEE_ERROR_SHORT_BUFFER:
+        return -ENOBUFS;
+      case TEE_ERROR_TIMEOUT:
+        return -ETIMEDOUT;
+      default:
+        return -EIO;
+    }
+}
+
+
+/****************************************************************************
+ * Name: optee_va_to_pa
+ *
+ * Description:
  *   Convert the specified virtual address to a physical address. If the
  *   virtual address does not belong to the user, it is assumed to be a
  *   kernel virtual address with a 1-1 mapping and the VA is returned as-is.
@@ -1443,26 +1475,22 @@ int optee_shm_alloc(FAR struct optee_priv_data *priv, FAR void *addr,
       ptr = addr;
     }
 
-  if (ptr == NULL)
+  if (!(flags & TEE_SHM_USER_MAP))
     {
-      goto err;
+      if (ptr == NULL)
+        {
+          goto err;
+        }
     }
 
   shm->fd = -1;
   shm->priv = priv;
   shm->vaddr = (uintptr_t)ptr;
-  shm->paddr = optee_va_to_pa((void *)shm->vaddr);
+  shm->paddr = ptr? optee_va_to_pa((void *)shm->vaddr): 0;
   shm->length = size;
   shm->flags = flags;
 
-  if (priv->role == OPTEE_ROLE_CA)
-    {
-      shm->id = idr_alloc(priv->shms, shm, 0, 0);
-    }
-  else
-    {
-      shm->id = idr_alloc(optee_supplicant_get_shm_idr(), shm, 0, 0);
-    }
+  shm->id = idr_alloc(priv->shms, shm, 0, 0);
 
   if (shm->id < 0)
     {
@@ -1525,13 +1553,6 @@ void optee_shm_free(FAR struct optee_shm *shm)
       kmm_free((FAR void *)(uintptr_t)shm->vaddr);
     }
 
-  if (!(shm->flags & (TEE_SHM_ALLOC | TEE_SHM_REGISTER)))
-    {
-      /* allocated by optee_ioctl_shm_alloc(), need to unmap */
-
-      munmap((FAR void *)(uintptr_t)shm->vaddr, shm->length);
-    }
-
   idr_remove(shm->priv->shms, shm->id);
   kmm_free(shm);
 }
@@ -1558,8 +1579,6 @@ int optee_register(void)
       return ret;
     }
 
-  dev_shms = idr_init();
-  optee_supplicant_init();
   ret = register_driver(OPTEE_SUPPLICANT_DEV_PATH, &g_optee_ops, 0666,
                        (void*)OPTEE_ROLE_SUPPLICANT);
 

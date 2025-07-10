@@ -44,23 +44,23 @@
 
 struct optee_supplicant_req
 {
-  sq_entry_t        link;
-  bool              in_queue;
-  uint32_t          func;
-  uint32_t          ret;
-  size_t            num_params;
+  sq_entry_t              link;
+  uint32_t                func;
+  uint32_t                ret;
+  size_t                  num_params;
   struct tee_ioctl_param *param;
-  sem_t             c;
+  sem_t                   c;
 };
 
 struct optee_supplicant
 {
-  mutex_t mutex;
-  int req_id;
+  mutex_t           mutex;
+  int               req_id;
   struct sq_queue_s reqs;
   FAR struct idr_s *idr;
   FAR struct idr_s *shm_idr;
-  sem_t reqs_c;
+  bool              running;
+  sem_t             reqs_c;
 };
 
 /****************************************************************************
@@ -73,7 +73,7 @@ static struct optee_supplicant supp_s;
  * Private Functions
  ****************************************************************************/
 
-static FAR struct optee_supplicant_req * supp_pop_entry(size_t num_params,
+static FAR struct optee_supplicant_req * pop_entry(size_t num_params,
                                                         int *id)
 {
   struct optee_supplicant_req *req;
@@ -97,7 +97,6 @@ static FAR struct optee_supplicant_req * supp_pop_entry(size_t num_params,
       return NULL;
     }
 
-  /* Allocate an ID for async response tracking */
   *id = idr_alloc(supp_s.idr, req, 0, INT32_MAX);
   if (*id < 0)
     {
@@ -105,7 +104,6 @@ static FAR struct optee_supplicant_req * supp_pop_entry(size_t num_params,
       return NULL;
     }
 
-  req->in_queue = false;
   return req;
 }
 
@@ -113,6 +111,10 @@ static FAR struct optee_supplicant_req * supp_pop_entry(size_t num_params,
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
+bool optee_supplicant_running(void)
+{
+  return supp_s.running;
+}
 
 void optee_supplicant_init(void)
 {
@@ -121,11 +123,14 @@ void optee_supplicant_init(void)
   nxsem_init(&supp_s.reqs_c, 0, 0);
   sq_init(&supp_s.reqs);
   supp_s.idr = idr_init();
+  supp_s.shm_idr = idr_init();
   supp_s.req_id = -1;
+  supp_s.running = true;
 }
 
 void optee_supplicant_uninit(void)
 {
+  supp_s.running = false;
   nxmutex_destroy(&supp_s.mutex);
   nxsem_destroy(&supp_s.reqs_c);
   idr_destroy(supp_s.idr);
@@ -137,9 +142,16 @@ uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
   struct optee_supplicant_req *req;
   uint32_t ret;
 
+  if (!optee_supplicant_running())
+    {
+      return TEE_ERROR_COMMUNICATION;
+    }
+
   req = (struct optee_supplicant_req *)kmm_zalloc(sizeof(*req));
   if (!req)
-    return TEE_ERROR_OUT_OF_MEMORY;
+    {
+      return TEE_ERROR_OUT_OF_MEMORY;
+    }
 
   _alert("[%s],  line %u", __func__, __LINE__);
   sem_init(&req->c, 0, 0);
@@ -151,7 +163,6 @@ uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
   nxmutex_lock(&supp_s.mutex);
   _alert("[%s],  line %u", __func__, __LINE__);
   sq_addlast(&req->link, &supp_s.reqs);
-  req->in_queue = true;
   nxmutex_unlock(&supp_s.mutex);
 
   _alert("[%s],  line %u", __func__, __LINE__);
@@ -159,7 +170,9 @@ uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
   sem_post(&supp_s.reqs_c);
   _alert("[%s],  line %u", __func__, __LINE__);
 
-  /* Wait for completion */
+
+  /* Wait for completion if supplicant is running. */
+
   while (sem_wait(&req->c) < 0)
     {
     }
@@ -199,7 +212,7 @@ int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
   for(;;)
     {
       nxmutex_lock(&supp_s.mutex);
-      req = supp_pop_entry(*num_params - num_meta, &id);
+      req = pop_entry(*num_params - num_meta, &id);
       nxmutex_unlock(&supp_s.mutex);
 
       if (req)
@@ -355,7 +368,7 @@ int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
 	ret = optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_ALLOC, 1, &param);
 	if (ret)
     {
-      return -ENOMEM;
+      return optee_convert_error(ret);
     }
 
 	nxmutex_lock(&supp_s.mutex);
@@ -366,11 +379,5 @@ int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
 
 FAR struct idr_s *optee_supplicant_get_shm_idr(void)
 {
-  return supp_s.shm_idr;
-}
-
-FAR struct idr_s *optee_supplicant_init_shm_idr(void)
-{
-  supp_s.shm_idr = idr_init();
   return supp_s.shm_idr;
 }
