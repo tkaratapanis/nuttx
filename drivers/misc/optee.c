@@ -129,12 +129,14 @@ struct optee_page_list_entry
  * Private Function Prototypes
  ****************************************************************************/
 
-/* The file operation functions */
+/* File operation functions for /dev/tee* */
 
 static int optee_open(FAR struct file *filep);
 static int optee_close(FAR struct file *filep);
 static int optee_ioctl(FAR struct file *filep, int cmd,
                        unsigned long arg);
+
+/* File operation functions for shm fds. */
 
 static int optee_shm_close(FAR struct file *filep);
 static int optee_shm_mmap(FAR struct file *filep,
@@ -254,7 +256,7 @@ static bool optee_is_valid_range(FAR const void *va, size_t size)
  *
  ****************************************************************************/
 
-FAR void *
+static FAR void *
 optee_shm_to_page_list(FAR struct optee_shm *shm, FAR uintptr_t *list_pa)
 {
   FAR struct optee_page_list_entry *list_entry;
@@ -284,14 +286,9 @@ optee_shm_to_page_list(FAR struct optee_shm *shm, FAR uintptr_t *list_pa)
 
   list_entry = (FAR struct optee_page_list_entry *)list;
   page = ALIGN_DOWN(shm->vaddr, pgsize);
-  usleep(1000);
-  _alert("[%s], line %u shm->vaddr is %lx, page is %lx\n", __func__, __LINE__, (uintptr_t)shm->vaddr, page );
   while (total_pages)
     {
       list_entry->pages_array[i++] = optee_va_to_pa((FAR const void *)page);
-      usleep(1000);
-      _alert("[%s], line %u registered physical page with addr %lx\n", __func__, __LINE__, optee_va_to_pa((void *)page));
-      usleep(1000);
       page += pgsize;
       total_pages--;
 
@@ -467,9 +464,9 @@ static int optee_shm_close(FAR struct file *filep)
  *
  ****************************************************************************/
 
-static int optee_shm_mmap(FAR struct file *filep, FAR struct mm_map_entry_s *map)
+static int optee_shm_mmap(FAR struct file *filep,
+                          FAR struct mm_map_entry_s *map)
 {
-
   struct optee_shm *shm = filep->f_priv;
   int32_t ret = OK;
 
@@ -531,6 +528,7 @@ static int optee_open(FAR struct file *filep)
         {
           return -EBUSY;
         }
+
       optee_supplicant_init();
       priv->shms = optee_supplicant_get_shm_idr();
     }
@@ -566,8 +564,8 @@ static int optee_close(FAR struct file *filep)
 
   idr_for_each_entry(priv->shms, shm, id)
     {
-      /* Here, we only free kernel allocations, the rest will be done by
-       * optee_shm_close().
+      /* Here, we only free, unfreed kernel allocations, the rest will be
+       * done by optee_shm_close().
        */
 
       if (shm->fd == -1)
@@ -582,6 +580,7 @@ static int optee_close(FAR struct file *filep)
     {
       optee_supplicant_uninit();
     }
+
   return 0;
 }
 
@@ -591,6 +590,7 @@ static int optee_memref_to_msg_param(FAR struct optee_priv_data *priv,
 {
   FAR struct optee_shm *shm;
   uintptr_t page_list_pa;
+  bool external_vm_context = false;
 
   if (p->c == TEE_MEMREF_NULL)
     {
@@ -606,7 +606,9 @@ static int optee_memref_to_msg_param(FAR struct optee_priv_data *priv,
   if (shm == NULL)
     {
       /* Search also the shared memory registered by the supplicant. */
+
       shm = idr_find(optee_supplicant_get_shm_idr(), p->c);
+      external_vm_context = true;
 
       if (shm == NULL)
         {
@@ -631,6 +633,15 @@ static int optee_memref_to_msg_param(FAR struct optee_priv_data *priv,
       mp->attr = OPTEE_MSG_ATTR_TYPE_TMEM_INPUT + p->attr -
                  TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT;
       mp->attr |= OPTEE_MSG_ATTR_NONCONTIG;
+
+      /* This shouldn't happen, we can't translate vmas from
+       * another vm context.
+       */
+
+      if (external_vm_context)
+        {
+          return -EPROTO;
+        }
 
       shm->page_list = optee_shm_to_page_list(shm, &page_list_pa);
       if (shm->page_list == NULL)
@@ -694,73 +705,6 @@ int optee_to_msg_param(FAR struct optee_priv_data *priv,
           default:
             return -EINVAL;
         }
-    }
-
-  return 0;
-}
-
-int optee_from_msg_param(FAR struct tee_ioctl_param *params,
-                                size_t num_params,
-                                FAR const struct optee_msg_param *mparams)
-{
-  size_t n;
-
-  for (n = 0; n < num_params; n++)
-    {
-      FAR const struct optee_msg_param *mp = mparams + n;
-      FAR struct tee_ioctl_param *p = params + n;
-      FAR struct optee_shm *shm = NULL;
-
-      switch (mp->attr & OPTEE_MSG_ATTR_TYPE_MASK)
-        {
-          case OPTEE_MSG_ATTR_TYPE_NONE:
-            p->attr = TEE_IOCTL_PARAM_ATTR_TYPE_NONE;
-            p->a = 0;
-            p->b = 0;
-            p->c = 0;
-            break;
-          case OPTEE_MSG_ATTR_TYPE_VALUE_INPUT:
-          case OPTEE_MSG_ATTR_TYPE_VALUE_OUTPUT:
-          case OPTEE_MSG_ATTR_TYPE_VALUE_INOUT:
-            p->attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT +
-                      mp->attr - OPTEE_MSG_ATTR_TYPE_VALUE_INPUT;
-            p->a = mp->u.value.a;
-            p->b = mp->u.value.b;
-            p->c = mp->u.value.c;
-            break;
-          case OPTEE_MSG_ATTR_TYPE_TMEM_INPUT:
-          case OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT:
-          case OPTEE_MSG_ATTR_TYPE_TMEM_INOUT:
-            p->attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT +
-                      mp->attr - OPTEE_MSG_ATTR_TYPE_TMEM_INPUT;
-            p->b = mp->u.tmem.size;
-
-            shm = (FAR struct optee_shm *)(uintptr_t)mp->u.tmem.shm_ref;
-            if (shm && shm->page_list)
-              {
-                kmm_free(shm->page_list);
-                shm->page_list = NULL;
-              }
-            break;
-          case OPTEE_MSG_ATTR_TYPE_RMEM_INPUT:
-          case OPTEE_MSG_ATTR_TYPE_RMEM_OUTPUT:
-          case OPTEE_MSG_ATTR_TYPE_RMEM_INOUT:
-            p->attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT +
-                      mp->attr - OPTEE_MSG_ATTR_TYPE_RMEM_INPUT;
-            p->b = mp->u.rmem.size;
-            p->a = mp->u.rmem.offs;
-            p->c = mp->u.rmem.shm_ref;
-            break;
-          default:
-            return -EINVAL;
-        }
-
-#ifndef CONFIG_ARCH_USE_MMU
-      if (shm)
-        {
-          up_invalidate_dcache(shm->vaddr, shm->vaddr + shm->length);
-        }
-#endif
     }
 
   return 0;
@@ -1026,7 +970,9 @@ optee_ioctl_shm_alloc(FAR struct optee_priv_data *priv,
       return ret;
     }
 
-  ret = file_allocate_from_inode(&g_optee_shm_inode, O_CLOEXEC | O_RDOK, 0, shm, 0);
+  ret = file_allocate_from_inode(&g_optee_shm_inode,
+                                 O_CLOEXEC | O_RDOK, 0, shm, 0);
+
   /* Will free automatically the shm once the descriptor is closed. */
 
   usleep(1000);
@@ -1066,9 +1012,6 @@ optee_shm_register_supplicant(FAR struct optee_priv_data *priv,
   shm->flags = TEE_SHM_REGISTER | TEE_SHM_SUPP;
   shm->page_list = optee_shm_to_page_list(shm, &page_list_pa);
   shm->paddr = page_list_pa;
-  usleep(1000);
-  _alert("[%s], line %u, Physical addr of rdata->addr (%lx) is %lx\n", __func__, __LINE__, addr, optee_va_to_pa((void *)addr));
-  usleep(1000);
 
   shm->id = idr_alloc(priv->shms, shm, 0, 0);
   if (shm->id < 0)
@@ -1080,7 +1023,6 @@ optee_shm_register_supplicant(FAR struct optee_priv_data *priv,
 
   return ret;
 }
-
 
 static int
 optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
@@ -1112,7 +1054,8 @@ optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
     }
   else if (priv->role == OPTEE_ROLE_SUPPLICANT)
     {
-      ret = optee_shm_register_supplicant(priv, (uintptr_t)rdata->addr, rdata->length, &shm);
+      ret = optee_shm_register_supplicant(priv, (uintptr_t)rdata->addr,
+                                          rdata->length, &shm);
       rdata->flags = shm->flags;
     }
   else
@@ -1154,11 +1097,11 @@ int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
       return -EFAULT;
     }
 
-
   if (data->buf_len > TEE_MAX_ARG_SIZE ||
       data->buf_len < sizeof(struct tee_iocl_supp_recv_arg))
-    return -EINVAL;
-
+    {
+      return -EINVAL;
+    }
 
   arg = (FAR struct tee_iocl_supp_recv_arg *)(uintptr_t)data->buf_ptr;
 
@@ -1178,44 +1121,40 @@ int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
       return -EINVAL;
     }
 
-
-  //params = kcalloc(num_params, sizeof(struct tee_param), GFP_KERNEL);
-  //params = kmm_zalloc( TEE_IOCTL_PARAM_SIZE(arg->num_params));
-  //if (!params)
-  //  return -ENOMEM;
-
-
   ret = optee_supplicant_recv(&arg->func, &arg->num_params, arg->params);
-  for (int n = 0; n < arg->num_params; n++) {
-  		struct tee_ioctl_param *p = arg->params + n;
 
-  		switch (p->attr & TEE_IOCTL_PARAM_ATTR_TYPE_MASK) {
-  		case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT:
-  		case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT:
-  			break;
-  		case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT:
-  		case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT:
-  		case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INOUT:
-  			if (!p->b) {
-  				p->a = 0;
-  				p->c = (uint64_t)-1; /* invalid shm id */
-  				break;
-  			}
+  for (int n = 0; n < arg->num_params; n++)
+    {
+      struct tee_ioctl_param *p = arg->params + n;
 
-        usleep(1000);
-        _alert("[%s], line %u, cookie is %lx\n", __func__, __LINE__, p->c);
-        usleep(1000);
-        p->c = ((struct optee_shm *)(p->c))->id;
-  			break;
-  		default:
-  			break;
-  		}
-  	}
+      switch (p->attr & TEE_IOCTL_PARAM_ATTR_TYPE_MASK)
+        {
+          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT:
+          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT:
+            break;
+          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT:
+          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT:
+          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INOUT:
+            if (!p->b)
+              {
+                p->a = 0;
+                p->c = (uint64_t)-1; /* invalid shm id */
+                break;
+              }
+
+          p->c = ((struct optee_shm *)(p->c))->id;
+          break;
+        default:
+          break;
+        }
+    }
+
   if (ret)
-    goto out;
+    {
+      goto out;
+    }
 
 out:
-  //kmm_free(params);
   return ret;
 }
 
@@ -1236,11 +1175,11 @@ int optee_ioctl_supplicant_send(FAR struct optee_priv_data *priv,
       return -EFAULT;
     }
 
-
   if (data->buf_len > TEE_MAX_ARG_SIZE ||
       data->buf_len < sizeof(struct tee_iocl_supp_send_arg))
-    return -EINVAL;
-
+    {
+      return -EINVAL;
+    }
 
   arg = (FAR struct tee_iocl_supp_send_arg *)(uintptr_t)data->buf_ptr;
 
@@ -1260,19 +1199,13 @@ int optee_ioctl_supplicant_send(FAR struct optee_priv_data *priv,
       return -EINVAL;
     }
 
-
-  //params = kcalloc(num_params, sizeof(struct tee_param), GFP_KERNEL);
-  //params = kmm_zalloc( TEE_IOCTL_PARAM_SIZE(arg->num_params));
-  //if (!params)
-  //  return -ENOMEM;
-
-
   ret = optee_supplicant_send(arg->ret, arg->num_params, arg->params);
   if (ret)
-    goto out;
+    {
+      goto out;
+    }
 
 out:
-  //kmm_free(params);
   return ret;
 }
 
@@ -1370,7 +1303,6 @@ int optee_convert_error(uint32_t oterr)
         return -EIO;
     }
 }
-
 
 /****************************************************************************
  * Name: optee_va_to_pa
@@ -1479,7 +1411,7 @@ int optee_shm_alloc(FAR struct optee_priv_data *priv, FAR void *addr,
     {
       if (ptr == NULL)
         {
-          goto err;
+          return -EINVAL;
         }
     }
 
@@ -1580,12 +1512,101 @@ int optee_register(void)
     }
 
   ret = register_driver(OPTEE_SUPPLICANT_DEV_PATH, &g_optee_ops, 0666,
-                       (void*)OPTEE_ROLE_SUPPLICANT);
+                        (void *)OPTEE_ROLE_SUPPLICANT);
 
   if (ret)
     {
       return ret;
     }
 
-  return register_driver(OPTEE_DEV_PATH, &g_optee_ops, 0666, (void *)OPTEE_ROLE_CA);
+  return register_driver(OPTEE_DEV_PATH, &g_optee_ops, 0666,
+                         (void *)OPTEE_ROLE_CA);
 }
+
+/****************************************************************************
+ * Name: optee_from_msg_param
+ *
+ * Description:
+ *   Converts and copies the message parameters received by OP-TEE to buffer
+ *   for processing by nuttx.
+ *
+ *
+ * Input Parameters:
+ *   mparams - Pointer to the message parameters received by OP-TEE.
+ *   num_params - Number of these parameters.
+ *
+ * Output Parameters:
+ *   params - Pointer, to copy the received parameters after some processing.
+ *
+ *
+ * Returned Values:
+ *   OK on success; A negated errno value is returned on any failure.
+ *
+ ****************************************************************************/
+
+int optee_from_msg_param(FAR struct tee_ioctl_param *params,
+                         size_t num_params,
+                         FAR const struct optee_msg_param *mparams)
+{
+  size_t n;
+
+  for (n = 0; n < num_params; n++)
+    {
+      FAR const struct optee_msg_param *mp = mparams + n;
+      FAR struct tee_ioctl_param *p = params + n;
+      FAR struct optee_shm *shm;
+
+      switch (mp->attr & OPTEE_MSG_ATTR_TYPE_MASK)
+        {
+          case OPTEE_MSG_ATTR_TYPE_NONE:
+            p->attr = TEE_IOCTL_PARAM_ATTR_TYPE_NONE;
+            p->a = 0;
+            p->b = 0;
+            p->c = 0;
+            break;
+          case OPTEE_MSG_ATTR_TYPE_VALUE_INPUT:
+          case OPTEE_MSG_ATTR_TYPE_VALUE_OUTPUT:
+          case OPTEE_MSG_ATTR_TYPE_VALUE_INOUT:
+            p->attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT +
+                      mp->attr - OPTEE_MSG_ATTR_TYPE_VALUE_INPUT;
+            p->a = mp->u.value.a;
+            p->b = mp->u.value.b;
+            p->c = mp->u.value.c;
+            break;
+          case OPTEE_MSG_ATTR_TYPE_TMEM_INPUT:
+          case OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT:
+          case OPTEE_MSG_ATTR_TYPE_TMEM_INOUT:
+            p->attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT +
+                      mp->attr - OPTEE_MSG_ATTR_TYPE_TMEM_INPUT;
+            p->b = mp->u.tmem.size;
+
+            shm = (FAR struct optee_shm *)(uintptr_t)mp->u.tmem.shm_ref;
+            if (shm && shm->page_list)
+              {
+                kmm_free(shm->page_list);
+                shm->page_list = NULL;
+              }
+            break;
+          case OPTEE_MSG_ATTR_TYPE_RMEM_INPUT:
+          case OPTEE_MSG_ATTR_TYPE_RMEM_OUTPUT:
+          case OPTEE_MSG_ATTR_TYPE_RMEM_INOUT:
+            p->attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT +
+                      mp->attr - OPTEE_MSG_ATTR_TYPE_RMEM_INPUT;
+            p->b = mp->u.rmem.size;
+            p->a = mp->u.rmem.offs;
+            p->c = mp->u.rmem.shm_ref;
+            break;
+          default:
+            return -EINVAL;
+        }
+#ifndef CONFIG_ARCH_USE_MMU
+          if (shm)
+            {
+              up_invalidate_dcache(shm->vaddr, shm->vaddr + shm->length);
+            }
+#endif
+    }
+
+  return 0;
+}
+

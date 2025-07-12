@@ -61,7 +61,8 @@ static void optee_rpc_handle_cmd_get_time(struct optee_msg_arg *arg)
 
   /* OP-TEE parameter validation. */
 
-  if (arg->num_params != 1 || (arg->params[0].attr & OPTEE_MSG_ATTR_TYPE_MASK)
+  if (arg->num_params != 1 ||
+      (arg->params[0].attr & OPTEE_MSG_ATTR_TYPE_MASK)
       != OPTEE_MSG_ATTR_TYPE_VALUE_OUTPUT)
     {
       arg->ret = TEE_ERROR_BAD_PARAMETERS;
@@ -101,28 +102,28 @@ static void optee_rpc_handle_cmd_get_time(struct optee_msg_arg *arg)
 
 static void optee_rpc_cmd_suspend(struct optee_msg_arg *arg)
 {
-    if (arg->num_params != 1 ||
-        (arg->params[0].attr & OPTEE_MSG_ATTR_TYPE_MASK) !=
-            OPTEE_MSG_ATTR_TYPE_VALUE_INPUT)
-      {
-        arg->ret = TEE_ERROR_BAD_PARAMETERS;
-        return;
-      }
+  if (arg->num_params != 1 ||
+      (arg->params[0].attr & OPTEE_MSG_ATTR_TYPE_MASK) !=
+          OPTEE_MSG_ATTR_TYPE_VALUE_INPUT)
+    {
+      arg->ret = TEE_ERROR_BAD_PARAMETERS;
+      return;
+    }
 
-    uint32_t msec_to_wait = arg->params[0].u.value.a;
+  uint32_t msec_to_wait = arg->params[0].u.value.a;
 
-    if (msec_to_wait)
-      {
-        int ret = nxsig_usleep((useconds_t)msec_to_wait * 1000);
+  if (msec_to_wait)
+    {
+      int ret = nxsig_usleep((useconds_t)msec_to_wait * 1000);
 
-        if (ret < 0 && get_errno() != EINTR)
-          {
-              arg->ret = TEE_ERROR_GENERIC;
-              return;
-          }
-      }
+      if (ret < 0 && get_errno() != EINTR)
+        {
+            arg->ret = TEE_ERROR_GENERIC;
+            return;
+        }
+    }
 
-    arg->ret = TEE_SUCCESS;
+  arg->ret = TEE_SUCCESS;
 }
 
 /****************************************************************************
@@ -157,24 +158,26 @@ static void optee_rpc_cmd_supplicant(struct optee_msg_arg *arg)
 
   _alert("[%s], line %u\n", __func__, __LINE__);
   if (optee_from_msg_param(params, arg->num_params, arg->params))
-  {
-    arg->ret = TEE_ERROR_BAD_PARAMETERS;
-    goto out;
-  }
+    {
+      arg->ret = TEE_ERROR_BAD_PARAMETERS;
+      goto out;
+    }
+
   _alert("[%s], line %u\n", __func__, __LINE__);
 
   arg->ret = optee_supplicant_request(arg->cmd, arg->num_params, params);
 
-  //memcpy(arg->params, params, sizeof(struct optee_msg_param));
-  //if (optee_to_msg_param(priv, arg->params, arg->num_params, params))
-  //  arg->ret = TEE_ERROR_BAD_PARAMETERS;
+  /* memcpy(arg->params, params, sizeof(struct optee_msg_param));
+   * if (optee_to_msg_param(priv, arg->params, arg->num_params, params))
+   * arg->ret = TEE_ERROR_BAD_PARAMETERS;
+   */
 
   for (int n = 0; n < arg->num_params; n++)
     {
-  		struct tee_ioctl_param *p = params + n;
+      struct tee_ioctl_param *p = params + n;
       struct optee_msg_param *mp = arg->params + n;
 
-  		switch (p->attr)
+      switch (p->attr)
         {
           case TEE_IOCTL_PARAM_ATTR_TYPE_NONE:
             mp->attr = TEE_IOCTL_PARAM_ATTR_TYPE_NONE;
@@ -182,17 +185,19 @@ static void optee_rpc_cmd_supplicant(struct optee_msg_arg *arg)
           case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT:
           case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_OUTPUT:
           case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT:
-          mp->attr = OPTEE_MSG_ATTR_TYPE_VALUE_INPUT + p->attr -
-               TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
-          mp->u.value.a = p->a;
-          mp->u.value.b = p->b;
-          mp->u.value.c = p->c;
+            mp->attr = OPTEE_MSG_ATTR_TYPE_VALUE_INPUT + p->attr -
+                 TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
+            mp->u.value.a = p->a;
+            mp->u.value.b = p->b;
+            mp->u.value.c = p->c;
           case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT:
           case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT:
           case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INOUT:
-          /* TODO: this code only covers registered memory.*/
+
+            /* TODO: this code only covers registered memory. */
+
             mp->attr = OPTEE_MSG_ATTR_TYPE_RMEM_INPUT + p->attr -
-           TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT;
+            TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT;
 
             mp->u.rmem.shm_ref = (unsigned long)p->c;
             mp->u.rmem.size = p->b;
@@ -202,9 +207,14 @@ static void optee_rpc_cmd_supplicant(struct optee_msg_arg *arg)
           default:
             break;
         }
-      _alert("[THEOTHEO]: buff %lx, size %lu, shref %lx", arg->params[n].u.tmem.buf_ptr, arg->params[n].u.tmem.size, arg->params[n].u.tmem.shm_ref);
-  	}
-  _alert("[%s], line %u\n, arg->ret is %x and arg->ret_origin is %x", __func__, __LINE__, arg->ret, arg->ret_origin);
+
+      _alert("[THEOTHEO]: buff %lx, size %lu, shref %lx",
+          arg->params[n].u.tmem.buf_ptr, arg->params[n].u.tmem.size,
+          arg->params[n].u.tmem.shm_ref);
+    }
+
+  _alert("[%s], line %u\n, arg->ret is %x and arg->ret_origin is %x",
+    __func__, __LINE__, arg->ret, arg->ret_origin);
   usleep(10000);
 out:
   kmm_free(params);
@@ -227,32 +237,38 @@ out:
  *
  ****************************************************************************/
 
-static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv, struct optee_msg_arg *arg, void **last_page_list)
+static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv,
+                                    struct optee_msg_arg *arg,
+                                    void **last_page_list)
 {
-	struct optee_shm *shm;
+  struct optee_shm *shm;
   size_t n;
   size_t sz;
   int32_t ret = OK;
 
-	arg->ret_origin = TEE_ORIGIN_COMMS;
+  arg->ret_origin = TEE_ORIGIN_COMMS;
 
-	if (arg->num_params != 1 ||
-	    arg->params[0].attr != OPTEE_MSG_ATTR_TYPE_VALUE_INPUT) {
-		arg->ret = TEE_ERROR_BAD_PARAMETERS;
-		return;
-	}
+  if (arg->num_params != 1 ||
+      arg->params[0].attr != OPTEE_MSG_ATTR_TYPE_VALUE_INPUT)
+    {
+      arg->ret = TEE_ERROR_BAD_PARAMETERS;
+      return;
+    }
 
-  for (n = 1; n < arg->num_params; n++) {
-		if (arg->params[n].attr != OPTEE_MSG_ATTR_TYPE_NONE) {
-			arg->ret = TEE_ERROR_BAD_PARAMETERS;
-			return;
-		}
-	}
+  for (n = 1; n < arg->num_params; n++)
+    {
+      if (arg->params[n].attr != OPTEE_MSG_ATTR_TYPE_NONE)
+        {
+          arg->ret = TEE_ERROR_BAD_PARAMETERS;
+          return;
+        }
+    }
 
   usleep(1000);
   usleep(1000);
   sz = arg->params[0].u.value.b;
-  _alert("[%s], sz is %lu, switch is %lu", __func__, sz, arg->params[0].u.value.a);
+  _alert("[%s], sz is %lu, switch is %lu", __func__, sz,
+    arg->params[0].u.value.a);
   switch (arg->params[0].u.value.a)
     {
       case OPTEE_MSG_RPC_SHM_TYPE_APPL:
@@ -276,7 +292,7 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv, struct opt
       arg->ret = TEE_ERROR_COMMUNICATION;
       return;
     }
-  else if ( ret != OK)
+  else if (ret != OK)
     {
       arg->ret = TEE_ERROR_GENERIC;
       return;
@@ -284,13 +300,15 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv, struct opt
 
   if (shm->flags | TEE_SHM_REGISTER)
     {
-      arg->params[0].attr = OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT | OPTEE_MSG_ATTR_NONCONTIG;
+      arg->params[0].attr = OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT |
+                            OPTEE_MSG_ATTR_NONCONTIG;
       arg->params[0].u.tmem.buf_ptr = shm->paddr;
       arg->params[0].u.tmem.size = shm->length;
       arg->params[0].u.tmem.shm_ref = (unsigned long)shm;
       *last_page_list = shm->page_list;
       usleep(1000);
-      _alert("[%s], line :: %u, ID is %u, SIZE %lu, shm_ref %lx", __func__, __LINE__,shm->id, shm->length, (uintptr_t)shm);
+      _alert("[%s], line :: %u, ID is %u, SIZE %lu, shm_ref %lx",
+        __func__, __LINE__, shm->id, shm->length, (uintptr_t)shm);
       usleep(1000);
     }
   else
@@ -320,15 +338,15 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv, struct opt
 
 static uint32_t optee_rpc_cmd_free_supplicant(int32_t shm_id)
 {
-	struct tee_ioctl_param param;
+  struct tee_ioctl_param param;
 
-	param.attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT;
-	param.a = OPTEE_MSG_RPC_SHM_TYPE_APPL;
-	param.b = shm_id;
-	param.c = 0;
+  param.attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT;
+  param.a = OPTEE_MSG_RPC_SHM_TYPE_APPL;
+  param.b = shm_id;
+  param.c = 0;
   _alert("[cmd_free_suppl]!!! The id is %u", shm_id);
 
-	return optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_FREE, 1, &param);
+  return optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_FREE, 1, &param);
 }
 
 /****************************************************************************
@@ -348,37 +366,39 @@ static uint32_t optee_rpc_cmd_free_supplicant(int32_t shm_id)
  ****************************************************************************/
 
 static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
-					 struct optee_msg_arg *arg)
+           struct optee_msg_arg *arg)
 {
-	struct optee_shm *shm;
+  struct optee_shm *shm;
 
-	arg->ret_origin = TEE_ORIGIN_COMMS;
+  arg->ret_origin = TEE_ORIGIN_COMMS;
 
-	if (arg->num_params != 1 ||
-	    arg->params[0].attr != OPTEE_MSG_ATTR_TYPE_VALUE_INPUT)
+  if (arg->num_params != 1 ||
+      arg->params[0].attr != OPTEE_MSG_ATTR_TYPE_VALUE_INPUT)
     {
       arg->ret = TEE_ERROR_BAD_PARAMETERS;
       return;
     }
 
-	shm = (struct optee_shm *)(unsigned long)arg->params[0].u.value.b;
+  shm = (struct optee_shm *)(unsigned long)arg->params[0].u.value.b;
   usleep(1000);
-  _alert("[%s], shm is %lx, switch is %lu", __func__, (uintptr_t)shm, arg->params[0].u.value.a);
+  _alert("[%s], shm is %lx, switch is %lu", __func__,
+    (uintptr_t)shm, arg->params[0].u.value.a);
   usleep(1000);
-	switch (arg->params[0].u.value.a) {
-	case OPTEE_MSG_RPC_SHM_TYPE_APPL:
-		arg->ret = optee_rpc_cmd_free_supplicant(shm->id);
-    idr_remove(optee_supplicant_get_shm_idr(), shm->id);
-		break;
-	case OPTEE_MSG_RPC_SHM_TYPE_KERNEL:
-    idr_remove(priv->shms, shm->id);
-    kmm_free((void *)shm->vaddr);
-    kmm_free(shm);
-    arg->ret = TEE_SUCCESS;
-		break;
-	default:
-		arg->ret = TEE_ERROR_BAD_PARAMETERS;
-	}
+  switch (arg->params[0].u.value.a)
+    {
+      case OPTEE_MSG_RPC_SHM_TYPE_APPL:
+        arg->ret = optee_rpc_cmd_free_supplicant(shm->id);
+        idr_remove(optee_supplicant_get_shm_idr(), shm->id);
+        break;
+      case OPTEE_MSG_RPC_SHM_TYPE_KERNEL:
+        idr_remove(priv->shms, shm->id);
+        kmm_free((void *)shm->vaddr);
+        kmm_free(shm);
+        arg->ret = TEE_SUCCESS;
+        break;
+      default:
+        arg->ret = TEE_ERROR_BAD_PARAMETERS;
+    }
 }
 
 /****************************************************************************

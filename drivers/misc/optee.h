@@ -97,6 +97,9 @@ int optee_transport_open(FAR struct optee_priv_data **priv);
 void optee_transport_close(FAR struct optee_priv_data *priv);
 int optee_transport_call(FAR struct optee_priv_data *priv,
                          FAR struct optee_msg_arg *arg);
+int optee_from_msg_param(FAR struct tee_ioctl_param *params,
+                         size_t num_params,
+                         FAR const struct optee_msg_param *mparams);
 
 #undef EXTERN
 #if defined(__cplusplus)

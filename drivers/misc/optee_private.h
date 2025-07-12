@@ -23,6 +23,9 @@
 #ifndef __DRIVERS_MISC_OPTEE_PRIVATE_H
 #define __DRIVERS_MISC_OPTEE_PRIVATE_H
 
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
 
 #include <sys/types.h>
 #include "optee.h"
@@ -48,6 +51,32 @@
 
 #define TEE_ORIGIN_COMMS               0x00000002
 
+/****************************************************************************
+ * Public Functions Definitions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: optee_rpc_handle_cmd
+ *
+ * Description:
+ *   Request from OP-TEE to suspend the current nuttx process.
+ *
+ * Input Parameters:
+ *   priv - pointer to the driver's optee_priv_data struct
+ *   shm  - Contains a pointer to the RPC message argument, allocated in the
+ *          shared page by the secure world. A copy of this message might be
+ *          sent to the supplicant process that runs in userspace for further
+ *          processing.
+ * Output Parameters:
+ *   last_page_list - Passes by reference a pointer to the virtual address
+ *                    of a page list. The page list can be freed by a
+ *                    caller or by this function, depending on the response
+ *                    of the OP-TEE to the next SMC.
+ *
+ * Returned Value:
+ *   None. The response to OP-TEE will passed through the shared memory.
+ *
+ ****************************************************************************/
 
 void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
                           struct optee_shm *shm, void **last_page_list);
@@ -59,15 +88,18 @@ void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
  *   Request from OP-TEE to suspend the current nuttx process.
  *
  * Input Parameters:
- *   arg  - Pointer to the RPC message argument, allocated in the shared page
- *          by the secure world. A copy of this message will be sent to the
- *          supplicant process that runs in userspace for further processing.
+ *   priv - Pointer to the driver's optee_priv_data struct
+ *
+ * Output Parameters:
+ *   shm - Passes by reference a pointer to an shm struct. The pointer will
+ *         be updated if the supplicant successfully carried this operation.
  *
  * Returned Value:
  *   None.  Result codes are written into arg->ret.
  *   Information about the shared memory is passed through arg->params
  *
  ****************************************************************************/
+
 int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
   size_t sz, struct optee_shm **shm);
 
@@ -87,4 +119,7 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
 
 int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
                     FAR struct tee_ioctl_param *params);
-#endif /*OPTEE_PRIVATE_H*/
+
+void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
+                          struct optee_shm *shm, void **last_page_list);
+#endif /* __DRIVERS_MISC_OPTEE_PRIVATE_H */

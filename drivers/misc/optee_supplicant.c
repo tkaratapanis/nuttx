@@ -107,10 +107,10 @@ static FAR struct optee_supplicant_req * pop_entry(size_t num_params,
   return req;
 }
 
-
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
+
 bool optee_supplicant_running(void)
 {
   return supp_s.running;
@@ -130,10 +130,12 @@ void optee_supplicant_init(void)
 
 void optee_supplicant_uninit(void)
 {
+  _alert("[%s], lling shms\n", __func__);
   supp_s.running = false;
   nxmutex_destroy(&supp_s.mutex);
   nxsem_destroy(&supp_s.reqs_c);
   idr_destroy(supp_s.idr);
+  _alert("[%s], lling shms\n", __func__);
 }
 
 uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
@@ -166,10 +168,11 @@ uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
   nxmutex_unlock(&supp_s.mutex);
 
   _alert("[%s],  line %u", __func__, __LINE__);
+
   /* Wake supplicant receiver */
+
   sem_post(&supp_s.reqs_c);
   _alert("[%s],  line %u", __func__, __LINE__);
-
 
   /* Wait for completion if supplicant is running. */
 
@@ -193,12 +196,14 @@ int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
   int id;
   size_t num_meta = (params->attr == TEE_IOCTL_PARAM_ATTR_META);
 
-  if(0 == num_params)
+  if (0 == num_params)
     {
       return -EINVAL;
     }
 
-  /* Linux here also checks the shm refcount, however in nuttx we don't use it. */
+  /* Linux here also checks the shm refcount, however in nuttx we don't
+   * use it.
+   */
 
   for (int n = 0; n < *num_params; n++)
     {
@@ -209,7 +214,7 @@ int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
         }
     }
 
-  for(;;)
+  for (; ; )
     {
       nxmutex_lock(&supp_s.mutex);
       req = pop_entry(*num_params - num_meta, &id);
@@ -241,11 +246,11 @@ int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
     }
 
   /* Setup parameters */
+
   *func = req->func;
   *num_params = req->num_params + num_meta;
 
   memcpy(params + num_meta, req->param, req->num_params * sizeof(params[0]));
-
 
   return OK;
 }
@@ -263,49 +268,44 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
 
   /* Check the parameters and obtain the request from the idr. */
 
-  {
-    if (!num_params)
-      {
-        return -EINVAL;
-      }
+  if (!num_params)
+    {
+      return -EINVAL;
+    }
 
-    /* Async. */
+  /* Async. */
 
-    if (supp_s.req_id == -1)
-      {
-        if (param->attr != async_attr)
-          {
-            _alert("[ERRRRRRRRRROR] Param attr is %lx\n", param->attr);
-            return -EINVAL;
-          }
-        id = param->a;
-        meta_params = 1;
-      }
-    else
-      {
-        /* Sync. */
+  if (supp_s.req_id == -1)
+    {
+      if (param->attr != async_attr)
+        {
+          return -EINVAL;
+        }
 
-        id = supp_s.req_id;
-        meta_params = 0;
-      }
+      id = param->a;
+      meta_params = 1;
+    }
+  else
+    {
+      /* Sync. */
 
-    req = idr_find(supp_s.idr, id);
-    if (!req)
-      {
-        return -ENOENT;
-      }
+      id = supp_s.req_id;
+      meta_params = 0;
+    }
 
-    if ((num_params - meta_params) != req->num_params)
-      {
-        //usleep(10000);
-        _alert("[ERRRROR], num_params are %u, meta is %lu, req_params are %u\n", num_params, meta_params, req->num_params);
-        //usleep(10000);
-        return -EINVAL;
-      }
+  req = idr_find(supp_s.idr, id);
+  if (!req)
+    {
+      return -ENOENT;
+    }
 
-    idr_remove(supp_s.idr, id);
-    supp_s.req_id = -1;
-  }
+  if ((num_params - meta_params) != req->num_params)
+    {
+      return -EINVAL;
+    }
+
+  idr_remove(supp_s.idr, id);
+  supp_s.req_id = -1;
 
   nxmutex_unlock(&supp_s.mutex);
 
@@ -314,7 +314,7 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
       return -EINVAL;
     }
 
-  /* Update parameters. */
+  /* Update output and in/out parameters. */
 
   _alert("[%s],  Requested function was %u", __func__, req->func);
   for (size_t n = 0; n < req->num_params; n++)
@@ -324,22 +324,22 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
 
       switch (p->attr & TEE_IOCTL_PARAM_ATTR_TYPE_MASK)
         {
-        case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_OUTPUT:
-        case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT:
-          p->a = r->a;
-          p->b = r->b;
-          p->c = r->c;
-          break;
+          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_OUTPUT:
+          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT:
+            p->a = r->a;
+            p->b = r->b;
+            p->c = r->c;
+            break;
 
-        case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT:
-        case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INOUT:
-          //p->u.memref.size = r->u.memref.size;
-          p->b = r->b;
-          break;
+          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT:
+          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INOUT:
+            p->b = r->b;
+            break;
 
-        default:
-          break;
+          default:
+            break;
         }
+
       usleep(1000);
       _alert("[THEO] Param attr is %lx\n", p->attr);
       _alert("[THEO] Param a is %lx\n", p->a);
@@ -355,26 +355,32 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
 }
 
 int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
-  size_t sz, struct optee_shm **shm)
+                                   size_t sz, struct optee_shm **shm)
 {
-	uint32_t ret;
-	struct tee_ioctl_param param;
+  uint32_t ret;
+  struct tee_ioctl_param param;
 
-	param.attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT;
-	param.a = OPTEE_MSG_RPC_SHM_TYPE_APPL;
-	param.b = sz;
-	param.c = 0;
+  param.attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT;
+  param.a = OPTEE_MSG_RPC_SHM_TYPE_APPL;
+  param.b = sz;
+  param.c = 0;
 
-	ret = optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_ALLOC, 1, &param);
-	if (ret)
+  ret = optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_ALLOC, 1, &param);
+  if (ret)
     {
       return optee_convert_error(ret);
     }
 
-	nxmutex_lock(&supp_s.mutex);
+  nxmutex_lock(&supp_s.mutex);
   *shm = idr_find(optee_supplicant_get_shm_idr(), param.c);
-	nxmutex_unlock(&supp_s.mutex);
-	return OK;
+  nxmutex_unlock(&supp_s.mutex);
+
+  if (NULL == *shm)
+    {
+      return -ENOENT;
+    }
+
+  return OK;
 }
 
 FAR struct idr_s *optee_supplicant_get_shm_idr(void)
