@@ -33,14 +33,14 @@
 #include <syslog.h>
 #include <unistd.h>
 #include "optee.h"
-#include "optee_private.h"
+#include "optee_supplicant.h"
 #include <debug.h>
 
 /****************************************************************************
  * Private Types
  ****************************************************************************/
 
-/* Request structure for supplicant RPC */
+/* Request structure for RPCs serviced by the supplicant. */
 
 struct optee_supplicant_req
 {
@@ -73,8 +73,24 @@ static struct optee_supplicant supp_s;
  * Private Functions
  ****************************************************************************/
 
+/****************************************************************************
+ * Name: optee_supplicant_pop_entry
+ *
+ * Description:
+ *   Pop the first request to the supplicant from from the request queue, and
+ *   create for it a unique id.
+ *
+ * Parameters:
+ *   num_params - Number of parameters passed.
+ *   None
+ *
+ * Returned Value:
+ *   True or False.
+ *
+ ****************************************************************************/
+
 static FAR struct optee_supplicant_req * pop_entry(size_t num_params,
-                                                        int *id)
+                                                   int *id)
 {
   struct optee_supplicant_req *req;
 
@@ -91,6 +107,9 @@ static FAR struct optee_supplicant_req * pop_entry(size_t num_params,
     }
 
   req = (struct optee_supplicant_req *)sq_remfirst(&supp_s.reqs);
+
+  /* The request can't fit in the supplicant's supplied parameter buffer. */
+
   if (num_params < req->num_params)
     {
       kmm_free(req);
@@ -111,10 +130,38 @@ static FAR struct optee_supplicant_req * pop_entry(size_t num_params,
  * Public Functions
  ****************************************************************************/
 
+/****************************************************************************
+ * Name: optee_supplicant_running
+ *
+ * Description:
+ *   Returns true of the userspace supplicant is running.
+ *
+ * Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   True or False.
+ *
+ ****************************************************************************/
+
 bool optee_supplicant_running(void)
 {
   return supp_s.running;
 }
+
+/****************************************************************************
+ * Name: optee_supplicant_init
+ *
+ * Description:
+ *   Initialize static supplicant data.
+ *
+ * Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
 
 void optee_supplicant_init(void)
 {
@@ -128,6 +175,20 @@ void optee_supplicant_init(void)
   supp_s.running = true;
 }
 
+/****************************************************************************
+ * Name: optee_supplicant_uninit
+ *
+ * Description:
+ *   Uninitialize static supplicant data.
+ *
+ * Parameters:
+ *   None
+ *
+ * Returned Value:
+ *   None
+ *
+ ****************************************************************************/
+
 void optee_supplicant_uninit(void)
 {
   _alert("[%s], lling shms\n", __func__);
@@ -138,8 +199,24 @@ void optee_supplicant_uninit(void)
   _alert("[%s], lling shms\n", __func__);
 }
 
+/****************************************************************************
+ * Name: optee_supplicant_request
+ *
+ * Description:
+ *   Uninitialize static supplicant data.
+ *
+ * Parameters:
+ *   func - Requested function for the supplicant to perform
+ *   params - Pointer pointer to parameter data.
+ *   num_params - Number of parameters passed.
+ *
+ * Returned Value:
+ *   TEE_SUCCESS on success or a global platform api error code on failure.
+ *
+ ****************************************************************************/
+
 uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
-                             FAR struct tee_ioctl_param *param)
+                                  FAR struct tee_ioctl_param *param)
 {
   struct optee_supplicant_req *req;
   uint32_t ret;
@@ -189,8 +266,28 @@ uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
   return ret;
 }
 
+/****************************************************************************
+ * Name: optee_supplicant_recv
+ *
+ * Description:
+ *   This function is invoked by an ioctl, used only by the supplicant. It
+ *   will obtain the function to be performed and the parameters passed by
+ *   OP-TEE.
+ *
+ * Parameters:
+ *   func - Pointer to obtain the function to be performed by the supplicant.
+ *   params - Pointer to the parameter data passed to supplicant.
+ *   num_params - Pointer with the number of parameters the supplicant can
+ *                process, and later updated with the number of parameters
+ *                of the OP-TEE's RPC request.
+ *
+ * Returned Value:
+ *   0 on success, a negated errno on failure.
+ *
+ ****************************************************************************/
+
 int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
-                    FAR struct tee_ioctl_param *params)
+                          FAR struct tee_ioctl_param *params)
 {
   struct optee_supplicant_req *req = NULL;
   int id;
@@ -200,10 +297,6 @@ int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
     {
       return -EINVAL;
     }
-
-  /* Linux here also checks the shm refcount, however in nuttx we don't
-   * use it.
-   */
 
   for (int n = 0; n < *num_params; n++)
     {
@@ -255,8 +348,26 @@ int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
   return OK;
 }
 
+/****************************************************************************
+ * Name: optee_supplicant_send
+ *
+ * Description:
+ *   This function is invoked by an ioctl, used only by the supplicant. It
+ *   will obtain the function to be performed and the parameters passed by
+ *   OP-TEE.
+ *
+ * Parameters:
+ *   ret - The return value to send to OP-TEE.
+ *   params - Contains the parameters passed by the supplicant to OP-TEE.
+ *   num_params - Number of parameters passed.
+ *
+ * Returned Value:
+ *   0 on success, a negated errno on failure.
+ *
+ ****************************************************************************/
+
 int optee_supplicant_send(uint32_t ret, uint32_t num_params,
-                    FAR struct tee_ioctl_param *param)
+                          FAR struct tee_ioctl_param *param)
 {
   struct optee_supplicant_req *req;
   int id;
@@ -354,6 +465,23 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
   return OK;
 }
 
+/****************************************************************************
+ * Name: optee_supplicant_cmd_alloc
+ *
+ * Description:
+ *   Prepares and creates a request for userspace memory allocation that was
+ *   requested by the OP-TEE through an RPC.
+ *
+ * Parameters:
+ *   priv - Pointer to the driver's optee_priv_data struct
+ *   shm - Passed by reference pointer to shared memory. On success it will
+ *         be updated with the memory the supplicant allocated.
+ *
+ * Returned Value:
+ *   0 on success, a negated errno on failure.
+ *
+ ****************************************************************************/
+
 int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
                                    size_t sz, struct optee_shm **shm)
 {
@@ -382,6 +510,21 @@ int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
 
   return OK;
 }
+
+/****************************************************************************
+ * Name: optee_supplicant_get_shm_idr
+ *
+ * Description:
+ *   Return a pointer to the idr_s tree containing the shared memory ids
+ *   allocated by the supplicant.
+ *
+ * Parameters:
+ *   None.
+ *
+ * Returned Value:
+ *   Pointer to the static shm_idr tree.
+ *
+ ****************************************************************************/
 
 FAR struct idr_s *optee_supplicant_get_shm_idr(void)
 {

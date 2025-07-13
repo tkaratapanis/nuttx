@@ -32,6 +32,7 @@
 
 #include "optee.h"
 #include "optee_smc.h"
+#include "optee_rpc.h"
 
 /****************************************************************************
  * Pre-processor Definitions

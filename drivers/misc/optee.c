@@ -47,7 +47,7 @@
 #endif
 
 #include "optee.h"
-#include "optee_private.h"
+#include "optee_supplicant.h"
 
 /****************************************************************************
  * The driver's main purpose is to support the porting of the open source
@@ -1531,12 +1531,10 @@ int optee_register(void)
  *   for processing by nuttx.
  *
  *
- * Input Parameters:
- *   mparams - Pointer to the message parameters received by OP-TEE.
+ * Parameters:
  *   num_params - Number of these parameters.
- *
- * Output Parameters:
  *   params - Pointer, to copy the received parameters after some processing.
+ *   mparams - Pointer to the message parameters received by OP-TEE.
  *
  *
  * Returned Values:

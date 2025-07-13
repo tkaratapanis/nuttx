@@ -25,12 +25,12 @@
  ****************************************************************************/
 
 #include "optee.h"
-#include "optee_private.h"
 #include "optee_msg.h"
 #include <arch/syscall.h>
 #include <stdint.h>
 #include <debug.h>
-#include "optee_private.h"
+#include "optee_supplicant.h"
+#include "optee_rpc.h"
 #include <nuttx/signal.h>
 
 /****************************************************************************
@@ -44,8 +44,8 @@
  *   Return REE wall-clock time (seconds + nanoseconds) to secure world.
  *
  * Parameters:
- *   arg - [In/Out] Pointer to the RPC message argument allocated in a shared
- *         page by the secure world.
+ *   arg - [In/Out] Pointer to the RPC message argument located in a shared
+ *         page and filled by the secure world.
  *
  * Returned Value:
  *   The time is written to:
@@ -91,9 +91,9 @@ static void optee_rpc_handle_cmd_get_time(struct optee_msg_arg *arg)
  *   Request from OP-TEE to suspend the current nuttx process.
  *
  * Parameters:
- *   arg - [In/Out] Pointer to the RPC message argument, allocated in the
- *         shared page by the secure world, containing the time in msec to
- *         sleep.
+ *   arg - [In/Out] Pointer to the RPC message argument, located in a
+ *         shared page, and filled by the secure world, containing the time
+ *         in msec to sleep.
  *
  * Returned Value:
  *   None.  Result codes are written into arg->ret.
@@ -133,9 +133,10 @@ static void optee_rpc_cmd_suspend(struct optee_msg_arg *arg)
  *   Request from OP-TEE to suspend the current nuttx process.
  *
  * Input Parameters:
- *   arg  - Pointer to the RPC message argument, allocated in the shared page
- *          by the secure world. A copy of this message will be sent to the
- *          supplicant process that runs in userspace for further processing.
+ *   arg  - Pointer to the RPC message argument, located in a shared page,
+ *          filled by the secure world. A copy of this message will be sent
+ *          to the supplicant process that runs in userspace for further
+ *          processing.
  *
  * Returned Value:
  *   None.  Result codes are written into arg->ret.
@@ -356,6 +357,7 @@ static uint32_t optee_rpc_cmd_free_supplicant(int32_t shm_id)
  *   Request from OP-TEE to suspend the current nuttx process.
  *
  * Input Parameters:
+ *   priv - Pointer to the driver's optee_priv_data struct
  *   arg  - Pointer to the RPC message argument, allocated in the shared page
  *          by the secure world. A copy of this message might be sent to the
  *          supplicant process that runs in userspace for further processing.
@@ -409,16 +411,22 @@ static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
  * Name: optee_rpc_handle_cmd
  *
  * Description:
- *   Handle RPC requests from OP-TEE
+ *   Request from OP-TEE to suspend the current nuttx process.
  *
  * Input Parameters:
- *   shm  - Contains a pointer to the RPC message argument, allocated in the
- *          shared page by the secure world. A copy of this message might be
- *          sent to the supplicant process that runs in userspace for further
- *          processing.
+ *   priv - pointer to the driver's optee_priv_data struct
+ *   shm  - Contains a pointer to the RPC message argument, located in the
+ *          shared page, filled by the secure world. A copy of this message
+ *          might be sent to the supplicant process that runs in userspace
+ *          for further processing.
+ * Output Parameters:
+ *   last_page_list - Passes by reference a pointer to the virtual address
+ *                    of a page list. The page list can be freed by a
+ *                    caller or by this function, depending on the response
+ *                    of the OP-TEE to the next SMC.
  *
  * Returned Value:
- *   None.  Result codes will be written in the shared memory.
+ *   None. The response to OP-TEE will passed through the shared memory.
  *
  ****************************************************************************/
 

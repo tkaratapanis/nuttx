@@ -38,6 +38,24 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+/* Some GlobalPlatform error codes used in this driver */
+
+#define TEE_SUCCESS                    0x00000000
+#define TEE_ERROR_ACCESS_DENIED        0xFFFF0001
+#define TEE_ERROR_BAD_FORMAT           0xFFFF0005
+#define TEE_ERROR_BAD_PARAMETERS       0xFFFF0006
+#define TEE_ERROR_GENERIC              0xFFFF0000
+#define TEE_ERROR_NOT_SUPPORTED        0xFFFF000A
+#define TEE_ERROR_OUT_OF_MEMORY        0xFFFF000C
+#define TEE_ERROR_BUSY                 0xFFFF000D
+#define TEE_ERROR_COMMUNICATION        0xFFFF000E
+#define TEE_ERROR_SECURITY             0xFFFF000F
+#define TEE_ERROR_SHORT_BUFFER         0xFFFF0010
+#define TEE_ERROR_TIMEOUT              0xFFFF3001
+
+#define TEE_ORIGIN_COMMS               0x00000002
+
+
 #define OPTEE_SERVER_PATH              "optee"
 #define OPTEE_MAX_PARAM_NUM            6
 
@@ -100,6 +118,7 @@ int optee_transport_call(FAR struct optee_priv_data *priv,
 int optee_from_msg_param(FAR struct tee_ioctl_param *params,
                          size_t num_params,
                          FAR const struct optee_msg_param *mparams);
+
 
 #undef EXTERN
 #if defined(__cplusplus)
