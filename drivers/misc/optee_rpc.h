@@ -33,8 +33,20 @@
  * Public Functions Prototypes
  ****************************************************************************/
 
+#undef EXTERN
+#if defined(__cplusplus)
+#define EXTERN extern "C"
+extern "C"
+{
+#else
+#define EXTERN extern
+#endif
 
 void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
                           struct optee_shm *shm, void **last_page_list);
 
+#undef EXTERN
+#if defined(__cplusplus)
+}
+#endif
 #endif /* __DRIVERS_MISC_OPTEE_RPC_H */

@@ -30,11 +30,9 @@
 #include <nuttx/queue.h>
 #include <nuttx/idr.h>
 #include <string.h>
-#include <syslog.h>
-#include <unistd.h>
 #include "optee.h"
 #include "optee_supplicant.h"
-#include <debug.h>
+#include "optee_msg.h"
 
 /****************************************************************************
  * Private Types
@@ -48,7 +46,7 @@ struct optee_supplicant_req
   uint32_t                func;
   uint32_t                ret;
   size_t                  num_params;
-  struct tee_ioctl_param *param;
+  struct tee_ioctl_param *params;
   sem_t                   c;
 };
 
@@ -74,18 +72,17 @@ static struct optee_supplicant supp_s;
  ****************************************************************************/
 
 /****************************************************************************
- * Name: optee_supplicant_pop_entry
+ * Name: pop_entry
  *
  * Description:
- *   Pop the first request to the supplicant from from the request queue, and
- *   create for it a unique id.
+ *   Pop the first request from the request queue, and create unique id.
  *
  * Parameters:
  *   num_params - Number of parameters passed.
- *   None
+ *   id         - Pointer to the unique request id.
  *
  * Returned Value:
- *   True or False.
+ *   A pointer to the request on success or NULL.
  *
  ****************************************************************************/
 
@@ -134,7 +131,7 @@ static FAR struct optee_supplicant_req * pop_entry(size_t num_params,
  * Name: optee_supplicant_running
  *
  * Description:
- *   Returns true of the userspace supplicant is running.
+ *   Returns true if the userspace supplicant is running.
  *
  * Parameters:
  *   None
@@ -153,7 +150,7 @@ bool optee_supplicant_running(void)
  * Name: optee_supplicant_init
  *
  * Description:
- *   Initialize static supplicant data.
+ *   Initialize supplicant data.
  *
  * Parameters:
  *   None
@@ -179,7 +176,7 @@ void optee_supplicant_init(void)
  * Name: optee_supplicant_uninit
  *
  * Description:
- *   Uninitialize static supplicant data.
+ *   Uninitialize supplicant data.
  *
  * Parameters:
  *   None
@@ -191,12 +188,10 @@ void optee_supplicant_init(void)
 
 void optee_supplicant_uninit(void)
 {
-  _alert("[%s], lling shms\n", __func__);
   supp_s.running = false;
   nxmutex_destroy(&supp_s.mutex);
   nxsem_destroy(&supp_s.reqs_c);
   idr_destroy(supp_s.idr);
-  _alert("[%s], lling shms\n", __func__);
 }
 
 /****************************************************************************
@@ -216,7 +211,7 @@ void optee_supplicant_uninit(void)
  ****************************************************************************/
 
 uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
-                                  FAR struct tee_ioctl_param *param)
+                                  FAR struct tee_ioctl_param *params)
 {
   struct optee_supplicant_req *req;
   uint32_t ret;
@@ -232,24 +227,18 @@ uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
       return TEE_ERROR_OUT_OF_MEMORY;
     }
 
-  _alert("[%s],  line %u", __func__, __LINE__);
   sem_init(&req->c, 0, 0);
   req->func = func;
   req->num_params = num_params;
-  req->param = param;
-  _alert("[%s],  line %u", __func__, __LINE__);
+  req->params = params;
 
   nxmutex_lock(&supp_s.mutex);
-  _alert("[%s],  line %u", __func__, __LINE__);
   sq_addlast(&req->link, &supp_s.reqs);
   nxmutex_unlock(&supp_s.mutex);
-
-  _alert("[%s],  line %u", __func__, __LINE__);
 
   /* Wake supplicant receiver */
 
   sem_post(&supp_s.reqs_c);
-  _alert("[%s],  line %u", __func__, __LINE__);
 
   /* Wait for completion if supplicant is running. */
 
@@ -257,12 +246,10 @@ uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
     {
     }
 
-  _alert("[%s],  line %u", __func__, __LINE__);
   ret = req->ret;
   sem_destroy(&req->c);
   kmm_free(req);
 
-  _alert("[%s],  line %u", __func__, __LINE__);
   return ret;
 }
 
@@ -343,7 +330,7 @@ int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
   *func = req->func;
   *num_params = req->num_params + num_meta;
 
-  memcpy(params + num_meta, req->param, req->num_params * sizeof(params[0]));
+  memcpy(params + num_meta, req->params, req->num_params * sizeof(params[0]));
 
   return OK;
 }
@@ -353,13 +340,13 @@ int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
  *
  * Description:
  *   This function is invoked by an ioctl, used only by the supplicant. It
- *   will obtain the function to be performed and the parameters passed by
- *   OP-TEE.
+ *   will update the parameters of the OP-TEE request with the response from
+ *   the supplicant.
  *
  * Parameters:
  *   ret - The return value to send to OP-TEE.
- *   params - Contains the parameters passed by the supplicant to OP-TEE.
- *   num_params - Number of parameters passed.
+ *   params - Contains the response parameters from nuttx.
+ *   num_params - Number of parameters.
  *
  * Returned Value:
  *   0 on success, a negated errno on failure.
@@ -367,13 +354,13 @@ int optee_supplicant_recv(FAR uint32_t *func, FAR uint32_t *num_params,
  ****************************************************************************/
 
 int optee_supplicant_send(uint32_t ret, uint32_t num_params,
-                          FAR struct tee_ioctl_param *param)
+                          FAR struct tee_ioctl_param *params)
 {
   struct optee_supplicant_req *req;
   int id;
   size_t meta_params = 0;
   const uint32_t async_attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT |
-                         TEE_IOCTL_PARAM_ATTR_META;
+                              TEE_IOCTL_PARAM_ATTR_META;
 
   nxmutex_lock(&supp_s.mutex);
 
@@ -388,12 +375,12 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
 
   if (supp_s.req_id == -1)
     {
-      if (param->attr != async_attr)
+      if (params->attr != async_attr)
         {
           return -EINVAL;
         }
 
-      id = param->a;
+      id = params->a;
       meta_params = 1;
     }
   else
@@ -427,11 +414,10 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
 
   /* Update output and in/out parameters. */
 
-  _alert("[%s],  Requested function was %u", __func__, req->func);
   for (size_t n = 0; n < req->num_params; n++)
     {
-      struct tee_ioctl_param *p = &req->param[n];
-      struct tee_ioctl_param *r = &param[n + meta_params];
+      struct tee_ioctl_param *p = &req->params[n];
+      struct tee_ioctl_param *r = &params[n + meta_params];
 
       switch (p->attr & TEE_IOCTL_PARAM_ATTR_TYPE_MASK)
         {
@@ -450,13 +436,6 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
           default:
             break;
         }
-
-      usleep(1000);
-      _alert("[THEO] Param attr is %lx\n", p->attr);
-      _alert("[THEO] Param a is %lx\n", p->a);
-      _alert("[THEO] Param b is %lx\n", p->b);
-      _alert("[THEO] Param c is %lx\n", p->c);
-      usleep(1000);
     }
 
   req->ret = ret;
@@ -473,9 +452,10 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
  *   requested by the OP-TEE through an RPC.
  *
  * Parameters:
- *   priv - Pointer to the driver's optee_priv_data struct
+ *   priv - Pointer to the driver's optee_priv_data struct.
+ *   size - Size to allocate.
  *   shm - Passed by reference pointer to shared memory. On success it will
- *         be updated with the memory the supplicant allocated.
+ *         be updated with the shared memory the supplicant allocated.
  *
  * Returned Value:
  *   0 on success, a negated errno on failure.
@@ -483,14 +463,15 @@ int optee_supplicant_send(uint32_t ret, uint32_t num_params,
  ****************************************************************************/
 
 int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
-                                   size_t sz, struct optee_shm **shm)
+                                   size_t size, struct optee_shm **shm)
 {
   uint32_t ret;
   struct tee_ioctl_param param;
+  FAR struct idr_s *supp_shm_list = NULL;
 
   param.attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT;
   param.a = OPTEE_MSG_RPC_SHM_TYPE_APPL;
-  param.b = sz;
+  param.b = size;
   param.c = 0;
 
   ret = optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_ALLOC, 1, &param);
@@ -500,7 +481,13 @@ int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
     }
 
   nxmutex_lock(&supp_s.mutex);
-  *shm = idr_find(optee_supplicant_get_shm_idr(), param.c);
+  supp_shm_list = optee_supplicant_get_shm_idr();
+  if (NULL == supp_shm_list)
+    {
+      return -ECOMM;
+    }
+
+  *shm = idr_find(supp_shm_list, param.c);
   nxmutex_unlock(&supp_s.mutex);
 
   if (NULL == *shm)
@@ -522,7 +509,7 @@ int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
  *   None.
  *
  * Returned Value:
- *   Pointer to the static shm_idr tree.
+ *   Pointer to the shm_idr tree.
  *
  ****************************************************************************/
 

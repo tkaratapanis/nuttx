@@ -26,9 +26,8 @@
 
 #include "optee.h"
 #include "optee_msg.h"
-#include <arch/syscall.h>
+#include <nuttx/kmalloc.h>
 #include <stdint.h>
-#include <debug.h>
 #include "optee_supplicant.h"
 #include "optee_rpc.h"
 #include <nuttx/signal.h>
@@ -44,8 +43,8 @@
  *   Return REE wall-clock time (seconds + nanoseconds) to secure world.
  *
  * Parameters:
- *   arg - [In/Out] Pointer to the RPC message argument located in a shared
- *         page and filled by the secure world.
+ *   arg - Pointer to the RPC message argument located in shared memory by
+ *         the secure world. The answer will be placed in the same argument.
  *
  * Returned Value:
  *   The time is written to:
@@ -77,8 +76,8 @@ static void optee_rpc_handle_cmd_get_time(struct optee_msg_arg *arg)
       return;
     }
 
-  arg->params[0].u.value.a = (uint32_t)ts.tv_sec;   /* Seconds since epoch  */
-  arg->params[0].u.value.b = (uint32_t)ts.tv_nsec;  /* Nanoseconds          */
+  arg->params[0].u.value.a = (uint32_t)ts.tv_sec;   /* Seconds since epoch. */
+  arg->params[0].u.value.b = (uint32_t)ts.tv_nsec;  /* Nanoseconds.         */
 
   arg->ret = TEE_SUCCESS;
   return;
@@ -91,9 +90,8 @@ static void optee_rpc_handle_cmd_get_time(struct optee_msg_arg *arg)
  *   Request from OP-TEE to suspend the current nuttx process.
  *
  * Parameters:
- *   arg - [In/Out] Pointer to the RPC message argument, located in a
- *         shared page, and filled by the secure world, containing the time
- *         in msec to sleep.
+ *   arg - Pointer to the RPC message argument, located in a shared page, by
+ *         the secure world, containing the time in msec to sleep.
  *
  * Returned Value:
  *   None.  Result codes are written into arg->ret.
@@ -102,6 +100,8 @@ static void optee_rpc_handle_cmd_get_time(struct optee_msg_arg *arg)
 
 static void optee_rpc_cmd_suspend(struct optee_msg_arg *arg)
 {
+  /* OP-TEE parameter validation. */
+
   if (arg->num_params != 1 ||
       (arg->params[0].attr & OPTEE_MSG_ATTR_TYPE_MASK) !=
           OPTEE_MSG_ATTR_TYPE_VALUE_INPUT)
@@ -132,24 +132,23 @@ static void optee_rpc_cmd_suspend(struct optee_msg_arg *arg)
  * Description:
  *   Request from OP-TEE to suspend the current nuttx process.
  *
- * Input Parameters:
+ * Parameters:
  *   priv - Pointer to the driver's optee_priv_data struct.
- *   arg  - Pointer to the RPC message argument, located in a shared page,
- *          filled by the secure world. A copy of this message will be sent
- *          to the supplicant process that runs in userspace for further
- *          processing.
+ *   arg  - Pointer to the RPC message argument, located in a shared page, by
+ *          by the secure world. A copy of this message will be sent to the
+ *          supplicant process that runs in userspace for further processing.
  *
  * Returned Value:
  *   None.  Result codes are written into arg->ret.
  *
  ****************************************************************************/
 
-static void optee_rpc_cmd_supplicant(FAR struct optee_priv_data *priv, struct optee_msg_arg *arg)
+static void optee_rpc_cmd_supplicant(FAR struct optee_priv_data *priv,
+                                     struct optee_msg_arg *arg)
 {
   struct tee_ioctl_param *params;
 
   arg->ret_origin = TEE_ORIGIN_COMMS;
-  _alert("[%s], line %u\n", __func__, __LINE__);
 
   params = kmm_zalloc(TEE_IOCTL_PARAM_SIZE(arg->num_params));
   if (!params)
@@ -158,21 +157,18 @@ static void optee_rpc_cmd_supplicant(FAR struct optee_priv_data *priv, struct op
       return;
     }
 
-  _alert("[%s], line %u\n", __func__, __LINE__);
   if (optee_from_msg_param(params, arg->num_params, arg->params))
     {
       arg->ret = TEE_ERROR_BAD_PARAMETERS;
       goto out;
     }
 
-  _alert("[%s], line %u\n", __func__, __LINE__);
-
   arg->ret = optee_supplicant_request(arg->cmd, arg->num_params, params);
 
   if (optee_to_msg_param(priv, arg->params, arg->num_params, params))
-  {
-      arg->ret = TEE_ERROR_BAD_PARAMETERS;
-  }
+    {
+        arg->ret = TEE_ERROR_BAD_PARAMETERS;
+    }
 
 out:
   kmm_free(params);
@@ -184,10 +180,13 @@ out:
  * Description:
  *   Request from OP-TEE to suspend the current nuttx process.
  *
- * Input Parameters:
- *   arg  - Pointer to the RPC message argument, allocated in the shared page
- *          by the secure world. A copy of this message might be sent to the
- *          supplicant process that runs in userspace for further processing.
+ * Parameters:
+ *   priv - Pointer to the driver's optee_priv_data struct.
+ *   arg - Pointer to the RPC message argument, located in a shared page
+ *         by the secure world. A copy of this message might be sent to the
+ *         supplicant process that runs in userspace for further processing.
+ *   last_page_list - Passes by reference a pointer that will be updated with
+ *                    the virtual address of the page list.
  *
  * Returned Value:
  *   None.  Result codes are written into arg->ret.
@@ -201,10 +200,12 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv,
 {
   struct optee_shm *shm;
   size_t n;
-  size_t sz;
+  size_t size;
   int32_t ret = OK;
 
   arg->ret_origin = TEE_ORIGIN_COMMS;
+
+  /* OP-TEE parameter validation. */
 
   if (arg->num_params != 1 ||
       arg->params[0].attr != OPTEE_MSG_ATTR_TYPE_VALUE_INPUT)
@@ -222,18 +223,14 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv,
         }
     }
 
-  usleep(1000);
-  usleep(1000);
-  sz = arg->params[0].u.value.b;
-  _alert("[%s], sz is %lu, switch is %lu", __func__, sz,
-    arg->params[0].u.value.a);
+  size = arg->params[0].u.value.b;
   switch (arg->params[0].u.value.a)
     {
       case OPTEE_MSG_RPC_SHM_TYPE_APPL:
-        ret = optee_supplicant_cmd_alloc(priv, sz, &shm);
+        ret = optee_supplicant_cmd_alloc(priv, size, &shm);
         break;
       case OPTEE_MSG_RPC_SHM_TYPE_KERNEL:
-        ret = optee_shm_alloc(priv, NULL , sz, TEE_SHM_ALLOC, &shm);
+        ret = optee_shm_alloc(priv, NULL , size, TEE_SHM_ALLOC, &shm);
         break;
       default:
         arg->ret = TEE_ERROR_BAD_PARAMETERS;
@@ -245,7 +242,7 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv,
       arg->ret = TEE_ERROR_OUT_OF_MEMORY;
       return;
     }
-  else if (ret == -ENODEV)
+  else if (ret == -ECOMM)
     {
       arg->ret = TEE_ERROR_COMMUNICATION;
       return;
@@ -264,16 +261,12 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv,
       arg->params[0].u.tmem.size = shm->length;
       arg->params[0].u.tmem.shm_ref = (unsigned long)shm;
       *last_page_list = shm->page_list;
-      usleep(1000);
-      _alert("[%s], line :: %u, ID is %u, SIZE %lu, shm_ref %lx",
-        __func__, __LINE__, shm->id, shm->length, (uintptr_t)shm);
-      usleep(1000);
     }
   else
     {
       arg->params[0].attr = OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT;
       arg->params[0].u.tmem.buf_ptr = shm->paddr;
-      arg->params[0].u.tmem.size = sz;
+      arg->params[0].u.tmem.size = size;
       arg->params[0].u.tmem.shm_ref = (unsigned long)shm;
     }
 
@@ -284,9 +277,9 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv,
  * Name: optee_rpc_cmd_free_supplicant
  *
  * Description:
- *   Request from OP-TEE to suspend the current nuttx process.
+ *   Handles userspace freeing of shared memory.
  *
- * Input Parameters:
+ * Parameters:
  *   shm_id - The id of the shared memory to be freed.
  *
  * Returned Value:
@@ -302,7 +295,6 @@ static uint32_t optee_rpc_cmd_free_supplicant(int32_t shm_id)
   param.a = OPTEE_MSG_RPC_SHM_TYPE_APPL;
   param.b = shm_id;
   param.c = 0;
-  _alert("[cmd_free_suppl]!!! The id is %u", shm_id);
 
   return optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_FREE, 1, &param);
 }
@@ -311,11 +303,11 @@ static uint32_t optee_rpc_cmd_free_supplicant(int32_t shm_id)
  * Name: optee_rpc_func_cmd_shm_free
  *
  * Description:
- *   Request from OP-TEE to suspend the current nuttx process.
+ *   RPC Request from OP-TEE to free shared memory allocated by nuttx.
  *
- * Input Parameters:
+ * Parameters:
  *   priv - Pointer to the driver's optee_priv_data struct.
- *   arg  - Pointer to the RPC message argument, allocated in the shared page
+ *   arg  - Pointer to the RPC message argument, located in a shared page
  *          by the secure world. A copy of this message might be sent to the
  *          supplicant process that runs in userspace for further processing.
  *
@@ -325,11 +317,14 @@ static uint32_t optee_rpc_cmd_free_supplicant(int32_t shm_id)
  ****************************************************************************/
 
 static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
-           struct optee_msg_arg *arg)
+                                        struct optee_msg_arg *arg)
 {
   struct optee_shm *shm;
+  FAR struct idr_s *supp_shm_list = NULL;
 
   arg->ret_origin = TEE_ORIGIN_COMMS;
+
+  /* OP-TEE parameter validation. */
 
   if (arg->num_params != 1 ||
       arg->params[0].attr != OPTEE_MSG_ATTR_TYPE_VALUE_INPUT)
@@ -339,15 +334,18 @@ static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
     }
 
   shm = (struct optee_shm *)(unsigned long)arg->params[0].u.value.b;
-  usleep(1000);
-  _alert("[%s], shm is %lx, switch is %lu", __func__,
-    (uintptr_t)shm, arg->params[0].u.value.a);
-  usleep(1000);
+
   switch (arg->params[0].u.value.a)
     {
       case OPTEE_MSG_RPC_SHM_TYPE_APPL:
         arg->ret = optee_rpc_cmd_free_supplicant(shm->id);
-        idr_remove(optee_supplicant_get_shm_idr(), shm->id);
+        supp_shm_list = optee_supplicant_get_shm_idr();
+        if (NULL == supp_shm_list)
+          {
+            arg->ret = TEE_ERROR_BAD_PARAMETERS;
+          }
+
+        idr_remove(supp_shm_list, shm->id);
         break;
       case OPTEE_MSG_RPC_SHM_TYPE_KERNEL:
         idr_remove(priv->shms, shm->id);
@@ -370,13 +368,12 @@ static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
  * Description:
  *   Request from OP-TEE to suspend the current nuttx process.
  *
- * Input Parameters:
+ * Parameters:
  *   priv - Pointer to the driver's optee_priv_data struct.
- *   shm  - Contains a pointer to the RPC message argument, located in the
- *          shared page, filled by the secure world. A copy of this message
+ *   shm  - Contains a pointer to the RPC message argument, located in a
+ *          shared page, by the secure world. A copy of this message
  *          might be sent to the supplicant process that runs in userspace
  *          for further processing.
- * Output Parameters:
  *   last_page_list - Passes by reference a pointer to the virtual address
  *                    of a page list. The page list can be freed by a
  *                    caller or by this function, depending on the response
@@ -392,17 +389,10 @@ void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
 {
   struct optee_msg_arg *arg;
 
-  if (0 == shm)
-    {
-      _err("[%s] shm error.\n", __func__);
-      return;
-    }
+  DEBUGASSERT(shm != NULL);
 
   arg = (struct optee_msg_arg *)shm->vaddr;
 
-  usleep(1000);
-  _alert("RPC invoked with %u", arg->cmd);
-  usleep(1000);
   switch (arg->cmd)
   {
     case OPTEE_MSG_RPC_CMD_GET_TIME:

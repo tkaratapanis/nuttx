@@ -912,9 +912,6 @@ optee_ioctl_shm_alloc(FAR struct optee_priv_data *priv,
       return -EFAULT;
     }
 
-  usleep(1000);
-  _alert("[%s], line IS %u", __func__, __LINE__);
-  usleep(1000);
   ret = optee_shm_alloc(priv, 0, data->size, TEE_SHM_USER_MAP, &shm);
   if (ret < 0)
     {
@@ -926,9 +923,6 @@ optee_ioctl_shm_alloc(FAR struct optee_priv_data *priv,
 
   /* Will free automatically the shm once the descriptor is closed. */
 
-  usleep(1000);
-  _alert("[%s], RET IS %d", __func__, ret);
-  usleep(1000);
   if (ret < 0)
     {
       optee_shm_free(shm);
@@ -1033,7 +1027,7 @@ optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
 
 static
 int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
-               struct tee_ioctl_buf_data  *data)
+                                struct tee_ioctl_buf_data  *data)
 {
   int ret;
   struct tee_iocl_supp_recv_arg *arg;
@@ -1104,7 +1098,7 @@ out:
 
 static
 int optee_ioctl_supplicant_send(FAR struct optee_priv_data *priv,
-               struct tee_ioctl_buf_data  *data)
+                                struct tee_ioctl_buf_data  *data)
 {
   int ret;
   struct tee_iocl_supp_send_arg *arg;
