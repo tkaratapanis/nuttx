@@ -651,7 +651,7 @@ static int optee_memref_to_msg_param(FAR struct optee_priv_data *priv,
 
       mp->u.tmem.buf_ptr = page_list_pa;
       mp->u.tmem.shm_ref = (uintptr_t)shm;
-      mp->u.tmem.size = shm->length;
+      mp->u.tmem.size = p->b;
     }
 
 #ifndef CONFIG_ARCH_USE_MMU
