@@ -133,6 +133,7 @@ static void optee_rpc_cmd_suspend(struct optee_msg_arg *arg)
  *   Request from OP-TEE to suspend the current nuttx process.
  *
  * Input Parameters:
+ *   priv - Pointer to the driver's optee_priv_data struct.
  *   arg  - Pointer to the RPC message argument, located in a shared page,
  *          filled by the secure world. A copy of this message will be sent
  *          to the supplicant process that runs in userspace for further
@@ -143,7 +144,7 @@ static void optee_rpc_cmd_suspend(struct optee_msg_arg *arg)
  *
  ****************************************************************************/
 
-static void optee_rpc_cmd_supplicant(struct optee_msg_arg *arg)
+static void optee_rpc_cmd_supplicant(FAR struct optee_priv_data *priv, struct optee_msg_arg *arg)
 {
   struct tee_ioctl_param *params;
 
@@ -168,55 +169,11 @@ static void optee_rpc_cmd_supplicant(struct optee_msg_arg *arg)
 
   arg->ret = optee_supplicant_request(arg->cmd, arg->num_params, params);
 
-  /* memcpy(arg->params, params, sizeof(struct optee_msg_param));
-   * if (optee_to_msg_param(priv, arg->params, arg->num_params, params))
-   * arg->ret = TEE_ERROR_BAD_PARAMETERS;
-   */
+  if (optee_to_msg_param(priv, arg->params, arg->num_params, params))
+  {
+      arg->ret = TEE_ERROR_BAD_PARAMETERS;
+  }
 
-  for (int n = 0; n < arg->num_params; n++)
-    {
-      struct tee_ioctl_param *p = params + n;
-      struct optee_msg_param *mp = arg->params + n;
-
-      switch (p->attr)
-        {
-          case TEE_IOCTL_PARAM_ATTR_TYPE_NONE:
-            mp->attr = TEE_IOCTL_PARAM_ATTR_TYPE_NONE;
-            break;
-          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT:
-          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_OUTPUT:
-          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT:
-            mp->attr = OPTEE_MSG_ATTR_TYPE_VALUE_INPUT + p->attr -
-                 TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
-            mp->u.value.a = p->a;
-            mp->u.value.b = p->b;
-            mp->u.value.c = p->c;
-          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT:
-          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT:
-          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INOUT:
-
-            /* TODO: this code only covers registered memory. */
-
-            mp->attr = OPTEE_MSG_ATTR_TYPE_RMEM_INPUT + p->attr -
-            TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT;
-
-            mp->u.rmem.shm_ref = (unsigned long)p->c;
-            mp->u.rmem.size = p->b;
-            mp->u.rmem.offs = p->a;
-
-            break;
-          default:
-            break;
-        }
-
-      _alert("[THEOTHEO]: buff %lx, size %lu, shref %lx",
-          arg->params[n].u.tmem.buf_ptr, arg->params[n].u.tmem.size,
-          arg->params[n].u.tmem.shm_ref);
-    }
-
-  _alert("[%s], line %u\n, arg->ret is %x and arg->ret_origin is %x",
-    __func__, __LINE__, arg->ret, arg->ret_origin);
-  usleep(10000);
 out:
   kmm_free(params);
 }
@@ -357,7 +314,7 @@ static uint32_t optee_rpc_cmd_free_supplicant(int32_t shm_id)
  *   Request from OP-TEE to suspend the current nuttx process.
  *
  * Input Parameters:
- *   priv - Pointer to the driver's optee_priv_data struct
+ *   priv - Pointer to the driver's optee_priv_data struct.
  *   arg  - Pointer to the RPC message argument, allocated in the shared page
  *          by the secure world. A copy of this message might be sent to the
  *          supplicant process that runs in userspace for further processing.
@@ -414,7 +371,7 @@ static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
  *   Request from OP-TEE to suspend the current nuttx process.
  *
  * Input Parameters:
- *   priv - pointer to the driver's optee_priv_data struct
+ *   priv - Pointer to the driver's optee_priv_data struct.
  *   shm  - Contains a pointer to the RPC message argument, located in the
  *          shared page, filled by the secure world. A copy of this message
  *          might be sent to the supplicant process that runs in userspace
@@ -463,6 +420,6 @@ void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
       optee_rpc_func_cmd_shm_free(priv, arg);
       break;
     default:
-      optee_rpc_cmd_supplicant(arg);
+      optee_rpc_cmd_supplicant(priv, arg);
   }
 }

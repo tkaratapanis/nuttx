@@ -120,6 +120,10 @@ int optee_from_msg_param(FAR struct tee_ioctl_param *params,
                          FAR const struct optee_msg_param *mparams);
 
 
+int optee_to_msg_param(FAR struct optee_priv_data *priv,
+                       FAR struct optee_msg_param *mparams,
+                       size_t num_params,
+                       FAR const struct tee_ioctl_param *params);
 #undef EXTERN
 #if defined(__cplusplus)
 }

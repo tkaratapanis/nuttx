@@ -661,55 +661,6 @@ static int optee_memref_to_msg_param(FAR struct optee_priv_data *priv,
   return 0;
 }
 
-int optee_to_msg_param(FAR struct optee_priv_data *priv,
-                              FAR struct optee_msg_param *mparams,
-                              size_t num_params,
-                              FAR const struct tee_ioctl_param *params)
-{
-  size_t n;
-  int ret;
-
-  for (n = 0; n < num_params; n++)
-    {
-      FAR const struct tee_ioctl_param *p = params + n;
-      FAR struct optee_msg_param *mp = mparams + n;
-
-      if (p->attr & ~TEE_IOCTL_PARAM_ATTR_MASK)
-        {
-          return -EINVAL;
-        }
-
-      switch (p->attr & TEE_IOCTL_PARAM_ATTR_TYPE_MASK)
-        {
-          case TEE_IOCTL_PARAM_ATTR_TYPE_NONE:
-            mp->attr = OPTEE_MSG_ATTR_TYPE_NONE;
-            break;
-          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT:
-          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_OUTPUT:
-          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT:
-            mp->attr = OPTEE_MSG_ATTR_TYPE_VALUE_INPUT + p->attr -
-                       TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
-            mp->u.value.a = p->a;
-            mp->u.value.b = p->b;
-            mp->u.value.c = p->c;
-            break;
-          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT:
-          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT:
-          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INOUT:
-            ret = optee_memref_to_msg_param(priv, mp, p);
-            if (ret < 0)
-              {
-                return ret;
-              }
-            break;
-          default:
-            return -EINVAL;
-        }
-    }
-
-  return 0;
-}
-
 static int optee_close_session(FAR struct optee_priv_data *priv,
                                uint32_t session)
 {
@@ -1105,11 +1056,6 @@ int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
 
   arg = (FAR struct tee_iocl_supp_recv_arg *)(uintptr_t)data->buf_ptr;
 
-  if (!optee_is_valid_range(arg, data->buf_len))
-    {
-      return -EFAULT;
-    }
-
   if (sizeof(*arg) + TEE_IOCTL_PARAM_SIZE(arg->num_params) !=
       data->buf_len)
     {
@@ -1141,8 +1087,6 @@ int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
                 p->c = (uint64_t)-1; /* invalid shm id */
                 break;
               }
-
-          p->c = ((struct optee_shm *)(p->c))->id;
           break;
         default:
           break;
@@ -1530,12 +1474,10 @@ int optee_register(void)
  *   Converts and copies the message parameters received by OP-TEE to buffer
  *   for processing by nuttx.
  *
- *
  * Parameters:
- *   num_params - Number of these parameters.
  *   params - Pointer, to copy the received parameters after some processing.
+ *   num_params - Number of these parameters.
  *   mparams - Pointer to the message parameters received by OP-TEE.
- *
  *
  * Returned Values:
  *   OK on success; A negated errno value is returned on any failure.
@@ -1583,6 +1525,11 @@ int optee_from_msg_param(FAR struct tee_ioctl_param *params,
               {
                 kmm_free(shm->page_list);
                 shm->page_list = NULL;
+                p->c = shm->id;
+              }
+            else
+              {
+                p->c = TEE_MEMREF_NULL;
               }
             break;
           case OPTEE_MSG_ATTR_TYPE_RMEM_INPUT:
@@ -1592,7 +1539,82 @@ int optee_from_msg_param(FAR struct tee_ioctl_param *params,
                       mp->attr - OPTEE_MSG_ATTR_TYPE_RMEM_INPUT;
             p->b = mp->u.rmem.size;
             p->a = mp->u.rmem.offs;
-            p->c = mp->u.rmem.shm_ref;
+            shm = (FAR struct optee_shm *)(uintptr_t)mp->u.tmem.shm_ref;
+            if (shm)
+              {
+                p->c = shm->id;
+              }
+            else
+              {
+                p->c = TEE_MEMREF_NULL;
+              }
+            break;
+          default:
+            return -EINVAL;
+        }
+    }
+
+  return 0;
+}
+
+/****************************************************************************
+ * Name: optee_to_msg_param
+ *
+ * Description:
+ *   Converts and copies the processed by nuttx parameters to the shared
+ *   memory area containing the message to/from the OP-TEE.
+ *
+ * Parameters:
+ *   params - Pointer, of the processed by nuttx parameters containing the
+ *            response.
+ *   num_params - Number of these parameters.
+ *   mparams - Pointer to the message parameters received by OP-TEE.
+ *
+ * Returned Values:
+ *   OK on success; A negated errno value is returned on any failure.
+ *
+ ****************************************************************************/
+
+int optee_to_msg_param(FAR struct optee_priv_data *priv,
+                              FAR struct optee_msg_param *mparams,
+                              size_t num_params,
+                              FAR const struct tee_ioctl_param *params)
+{
+  size_t n;
+  int ret;
+
+  for (n = 0; n < num_params; n++)
+    {
+      FAR const struct tee_ioctl_param *p = params + n;
+      FAR struct optee_msg_param *mp = mparams + n;
+
+      if (p->attr & ~TEE_IOCTL_PARAM_ATTR_MASK)
+        {
+          return -EINVAL;
+        }
+
+      switch (p->attr & TEE_IOCTL_PARAM_ATTR_TYPE_MASK)
+        {
+          case TEE_IOCTL_PARAM_ATTR_TYPE_NONE:
+            mp->attr = OPTEE_MSG_ATTR_TYPE_NONE;
+            break;
+          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT:
+          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_OUTPUT:
+          case TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT:
+            mp->attr = OPTEE_MSG_ATTR_TYPE_VALUE_INPUT + p->attr -
+                       TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
+            mp->u.value.a = p->a;
+            mp->u.value.b = p->b;
+            mp->u.value.c = p->c;
+            break;
+          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT:
+          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT:
+          case TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INOUT:
+            ret = optee_memref_to_msg_param(priv, mp, p);
+            if (ret < 0)
+              {
+                return ret;
+              }
             break;
           default:
             return -EINVAL;
