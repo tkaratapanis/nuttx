@@ -1063,6 +1063,11 @@ int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
 
   ret = optee_supplicant_recv(&arg->func, &arg->num_params, arg->params);
 
+  if (ret)
+    {
+      goto out;
+    }
+
   for (int n = 0; n < arg->num_params; n++)
     {
       struct tee_ioctl_param *p = arg->params + n;
@@ -1085,11 +1090,6 @@ int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
         default:
           break;
         }
-    }
-
-  if (ret)
-    {
-      goto out;
     }
 
 out:
