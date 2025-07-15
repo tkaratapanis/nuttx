@@ -53,8 +53,12 @@ FAR struct idr_s *optee_supplicant_init_shm_idr(void);
 uint32_t optee_supplicant_request(uint32_t func, size_t num_params,
                                   FAR struct tee_ioctl_param *param);
 
+uint32_t optee_supplicant_cmd_free(int32_t shm_id);
 int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
                                    size_t sz, struct optee_shm **shm);
+
+void optee_supplicant_cmd(FAR struct optee_priv_data *priv,
+                          struct optee_msg_arg *arg);
 
 int optee_supplicant_send(uint32_t ret, uint32_t num_params,
                           FAR struct tee_ioctl_param *param);

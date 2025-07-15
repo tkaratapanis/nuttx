@@ -54,10 +54,13 @@ parameters to configure (e.g. RPMsg remote CPU name through
   encounter issues with shared memory depending on the state of the data
   cache in Secure World.
 
+If ``CONFIG_DEV_OPTEE_SMC`` is enabled we can also enable the kernel driver
+for the TEE supplicant by using ``CONFIG_DEV_OPTEE_SUPPLICANT``.
+
 Successful registration of the driver can be verified by looking into
-``/dev/tee0`` and ``/dev/teepriv0``. For instance, incompatibility with the TEE OS
-running in the system, will prevent the ``/dev/tee0`` character device from being
-registered.
+``/dev/tee0`` and ``/dev/teepriv0`` (for the supplicant). For instance,
+incompatibility with the TEE OS running in the system, will prevent the
+``/dev/tee0`` character device from being registered.
 
 IOCTLs supported
 ================

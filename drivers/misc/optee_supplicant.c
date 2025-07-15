@@ -499,6 +499,80 @@ int32_t optee_supplicant_cmd_alloc(FAR struct optee_priv_data *priv,
 }
 
 /****************************************************************************
+ * Name: optee_supplicant_cmd_free
+ *
+ * Description:
+ *   Handles userspace freeing of shared memory.
+ *
+ * Parameters:
+ *   shm_id - The id of the shared memory to be freed.
+ *
+ * Returned Value:
+ *   TEE_SUCCESS on success or a global platform api error code on failure.
+ *
+ ****************************************************************************/
+
+uint32_t optee_supplicant_cmd_free(int32_t shm_id)
+{
+  struct tee_ioctl_param param;
+
+  param.attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT;
+  param.a = OPTEE_MSG_RPC_SHM_TYPE_APPL;
+  param.b = shm_id;
+  param.c = 0;
+
+  return optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_FREE, 1, &param);
+}
+
+/****************************************************************************
+ * Name: optee_supplicant_cmd
+ *
+ * Description:
+ *   Request from OP-TEE to suspend the current nuttx process.
+ *
+ * Parameters:
+ *   priv - Pointer to the driver's optee_priv_data struct.
+ *   arg  - Pointer to the RPC message argument, located in a shared page, by
+ *          by the secure world. A copy of this message will be sent to the
+ *          supplicant process that runs in userspace for further processing.
+ *
+ * Returned Value:
+ *   None.  Result codes are written into arg->ret.
+ *
+ ****************************************************************************/
+
+void optee_supplicant_cmd(FAR struct optee_priv_data *priv,
+                          struct optee_msg_arg *arg)
+{
+  struct tee_ioctl_param *params;
+
+  arg->ret_origin = TEE_ORIGIN_COMMS;
+
+  params = kmm_zalloc(TEE_IOCTL_PARAM_SIZE(arg->num_params));
+  if (!params)
+    {
+      arg->ret = TEE_ERROR_OUT_OF_MEMORY;
+      return;
+    }
+
+  if (optee_from_msg_param(params, arg->num_params, arg->params))
+    {
+      arg->ret = TEE_ERROR_BAD_PARAMETERS;
+      goto out;
+    }
+
+  arg->ret = optee_supplicant_request(arg->cmd, arg->num_params, params);
+
+  if (optee_to_msg_param(priv, arg->params, arg->num_params, params))
+    {
+        arg->ret = TEE_ERROR_BAD_PARAMETERS;
+    }
+
+out:
+  kmm_free(params);
+}
+
+/****************************************************************************
  * Name: optee_supplicant_get_shm_idr
  *
  * Description:

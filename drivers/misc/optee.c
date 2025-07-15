@@ -520,6 +520,7 @@ static int optee_open(FAR struct file *filep)
     {
       priv->shms = idr_init();
     }
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
   else if (role == OPTEE_ROLE_SUPPLICANT)
     {
       /* Allow only one process to open the device. */
@@ -532,6 +533,7 @@ static int optee_open(FAR struct file *filep)
       optee_supplicant_init();
       priv->shms = optee_supplicant_get_shm_idr();
     }
+#endif
   else
     {
       return -EOPNOTSUPP;
@@ -558,7 +560,9 @@ static int optee_open(FAR struct file *filep)
 static int optee_close(FAR struct file *filep)
 {
   FAR struct optee_priv_data *priv = filep->f_priv;
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
   enum optee_role_e role = (uintptr_t)filep->f_inode->i_private;
+#endif
   FAR struct optee_shm *shm;
   int id = 0;
 
@@ -576,10 +580,12 @@ static int optee_close(FAR struct file *filep)
 
   idr_destroy(priv->shms);
   optee_transport_close(priv);
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
   if (role == OPTEE_ROLE_SUPPLICANT)
     {
       optee_supplicant_uninit();
     }
+#endif
 
   return 0;
 }
@@ -935,6 +941,7 @@ optee_ioctl_shm_alloc(FAR struct optee_priv_data *priv,
   return shm->fd;
 }
 
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
 static int
 optee_shm_register_supplicant(FAR struct optee_priv_data *priv,
                               uintptr_t addr, uint64_t length,
@@ -968,6 +975,7 @@ optee_shm_register_supplicant(FAR struct optee_priv_data *priv,
 
   return ret;
 }
+#endif
 
 static int
 optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
@@ -997,12 +1005,15 @@ optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
       ret = optee_shm_alloc(priv, (FAR void *)(uintptr_t)rdata->addr,
                             rdata->length, TEE_SHM_REGISTER, &shm);
     }
+
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
   else if (priv->role == OPTEE_ROLE_SUPPLICANT)
     {
       ret = optee_shm_register_supplicant(priv, (uintptr_t)rdata->addr,
                                           rdata->length, &shm);
       rdata->flags = shm->flags;
     }
+#endif
   else
     {
       return -ENODEV;
@@ -1025,6 +1036,7 @@ optee_ioctl_shm_register(FAR struct optee_priv_data *priv,
   return ret;
 }
 
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
 static
 int optee_ioctl_supplicant_recv(FAR struct optee_priv_data *priv,
                                 struct tee_ioctl_buf_data  *data)
@@ -1146,6 +1158,7 @@ int optee_ioctl_supplicant_send(FAR struct optee_priv_data *priv,
 out:
   return ret;
 }
+#endif
 
 /****************************************************************************
  * Name: optee_ioctl
@@ -1184,10 +1197,12 @@ static int optee_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
         return optee_ioctl_shm_alloc(priv, parg);
       case TEE_IOC_SHM_REGISTER:
         return optee_ioctl_shm_register(priv, parg);
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
       case TEE_IOC_SUPPL_RECV:
         return optee_ioctl_supplicant_recv(priv, parg);
       case TEE_IOC_SUPPL_SEND:
         return optee_ioctl_supplicant_send(priv, parg);
+#endif
       default:
         return -ENOTTY;
     }
@@ -1448,7 +1463,7 @@ int optee_register(void)
     {
       return ret;
     }
-
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
   ret = register_driver(OPTEE_SUPPLICANT_DEV_PATH, &g_optee_ops, 0666,
                         (void *)OPTEE_ROLE_SUPPLICANT);
 
@@ -1456,6 +1471,7 @@ int optee_register(void)
     {
       return ret;
     }
+#endif
 
   return register_driver(OPTEE_DEV_PATH, &g_optee_ops, 0666,
                          (void *)OPTEE_ROLE_CA);

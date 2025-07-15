@@ -81,10 +81,11 @@ ifneq ($(CONFIG_DEV_OPTEE_NONE),y)
   ifeq ($(CONFIG_DEV_OPTEE_SMC),y)
     CSRCS += optee_smc.c
     CSRCS += optee_rpc.c
-    CSRCS += optee_supplicant.c
+    ifeq ($(CONFIG_DEV_OPTEE_SUPPLICANT),y)
+      CSRCS += optee_supplicant.c
+    endif
   else
     CSRCS += optee_socket.c
-    CSRCS += optee_supplicant.c
   endif
 endif
 

@@ -126,53 +126,6 @@ static void optee_rpc_cmd_suspend(struct optee_msg_arg *arg)
   arg->ret = TEE_SUCCESS;
 }
 
-/****************************************************************************
- * Name: optee_rpc_cmd_supplicant
- *
- * Description:
- *   Request from OP-TEE to suspend the current nuttx process.
- *
- * Parameters:
- *   priv - Pointer to the driver's optee_priv_data struct.
- *   arg  - Pointer to the RPC message argument, located in a shared page, by
- *          by the secure world. A copy of this message will be sent to the
- *          supplicant process that runs in userspace for further processing.
- *
- * Returned Value:
- *   None.  Result codes are written into arg->ret.
- *
- ****************************************************************************/
-
-static void optee_rpc_cmd_supplicant(FAR struct optee_priv_data *priv,
-                                     struct optee_msg_arg *arg)
-{
-  struct tee_ioctl_param *params;
-
-  arg->ret_origin = TEE_ORIGIN_COMMS;
-
-  params = kmm_zalloc(TEE_IOCTL_PARAM_SIZE(arg->num_params));
-  if (!params)
-    {
-      arg->ret = TEE_ERROR_OUT_OF_MEMORY;
-      return;
-    }
-
-  if (optee_from_msg_param(params, arg->num_params, arg->params))
-    {
-      arg->ret = TEE_ERROR_BAD_PARAMETERS;
-      goto out;
-    }
-
-  arg->ret = optee_supplicant_request(arg->cmd, arg->num_params, params);
-
-  if (optee_to_msg_param(priv, arg->params, arg->num_params, params))
-    {
-        arg->ret = TEE_ERROR_BAD_PARAMETERS;
-    }
-
-out:
-  kmm_free(params);
-}
 
 /****************************************************************************
  * Name: optee_rpc_cmd_shm_alloc
@@ -227,7 +180,12 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv,
   switch (arg->params[0].u.value.a)
     {
       case OPTEE_MSG_RPC_SHM_TYPE_APPL:
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
         ret = optee_supplicant_cmd_alloc(priv, size, &shm);
+#else
+        arg->ret = TEE_ERROR_NOT_SUPPORTED;
+        return;
+#endif
         break;
       case OPTEE_MSG_RPC_SHM_TYPE_KERNEL:
         ret = optee_shm_alloc(priv, NULL , size, TEE_SHM_ALLOC, &shm);
@@ -274,32 +232,6 @@ static void optee_rpc_cmd_shm_alloc(FAR struct optee_priv_data *priv,
 }
 
 /****************************************************************************
- * Name: optee_rpc_cmd_free_supplicant
- *
- * Description:
- *   Handles userspace freeing of shared memory.
- *
- * Parameters:
- *   shm_id - The id of the shared memory to be freed.
- *
- * Returned Value:
- *   TEE_SUCCESS on success or a global platform api error code on failure.
- *
- ****************************************************************************/
-
-static uint32_t optee_rpc_cmd_free_supplicant(int32_t shm_id)
-{
-  struct tee_ioctl_param param;
-
-  param.attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INOUT;
-  param.a = OPTEE_MSG_RPC_SHM_TYPE_APPL;
-  param.b = shm_id;
-  param.c = 0;
-
-  return optee_supplicant_request(OPTEE_MSG_RPC_CMD_SHM_FREE, 1, &param);
-}
-
-/****************************************************************************
  * Name: optee_rpc_func_cmd_shm_free
  *
  * Description:
@@ -338,7 +270,19 @@ static void optee_rpc_func_cmd_shm_free(FAR struct optee_priv_data *priv,
   switch (arg->params[0].u.value.a)
     {
       case OPTEE_MSG_RPC_SHM_TYPE_APPL:
-        arg->ret = optee_rpc_cmd_free_supplicant(shm->id);
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
+        arg->ret = optee_supplicant_cmd_free(shm->id);
+#else
+        arg->ret = TEE_ERROR_NOT_SUPPORTED;
+        return;
+#endif
+      if (arg->ret)
+          {
+            /* The supplicant either failed or isn't running. */
+
+            return;
+          }
+
         supp_shm_list = optee_supplicant_get_shm_idr();
         if (NULL == supp_shm_list)
           {
@@ -394,22 +338,26 @@ void optee_rpc_handle_cmd(FAR struct optee_priv_data *priv,
   arg = (struct optee_msg_arg *)shm->vaddr;
 
   switch (arg->cmd)
-  {
-    case OPTEE_MSG_RPC_CMD_GET_TIME:
-      optee_rpc_handle_cmd_get_time(arg);
-      break;
-    case OPTEE_MSG_RPC_CMD_SUSPEND:
-      optee_rpc_cmd_suspend(arg);
-      break;
-    case OPTEE_MSG_RPC_CMD_SHM_ALLOC:
-      kmm_free(*last_page_list);
-      *last_page_list = 0;
-      optee_rpc_cmd_shm_alloc(priv, arg, last_page_list);
-      break;
-    case OPTEE_MSG_RPC_CMD_SHM_FREE:
-      optee_rpc_func_cmd_shm_free(priv, arg);
-      break;
-    default:
-      optee_rpc_cmd_supplicant(priv, arg);
-  }
+    {
+      case OPTEE_MSG_RPC_CMD_GET_TIME:
+        optee_rpc_handle_cmd_get_time(arg);
+        break;
+      case OPTEE_MSG_RPC_CMD_SUSPEND:
+        optee_rpc_cmd_suspend(arg);
+        break;
+      case OPTEE_MSG_RPC_CMD_SHM_ALLOC:
+        kmm_free(*last_page_list);
+        *last_page_list = 0;
+        optee_rpc_cmd_shm_alloc(priv, arg, last_page_list);
+        break;
+      case OPTEE_MSG_RPC_CMD_SHM_FREE:
+        optee_rpc_func_cmd_shm_free(priv, arg);
+        break;
+      default:
+#ifdef CONFIG_DEV_OPTEE_SUPPLICANT
+        optee_supplicant_cmd(priv, arg);
+#else
+        arg->ret = TEE_ERROR_NOT_SUPPORTED;
+#endif
+    }
 }
