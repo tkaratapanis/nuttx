@@ -661,7 +661,7 @@ static int optee_memref_to_msg_param(FAR struct optee_priv_data *priv,
     }
 
 #ifndef CONFIG_ARCH_USE_MMU
-  up_clean_dcache(shm->addr, shm->addr + shm->length);
+  up_clean_dcache(shm->vaddr, shm->vaddr + shm->length);
 #endif
 
   return 0;
@@ -1504,7 +1504,7 @@ int optee_from_msg_param(FAR struct tee_ioctl_param *params,
     {
       FAR const struct optee_msg_param *mp = mparams + n;
       FAR struct tee_ioctl_param *p = params + n;
-      FAR struct optee_shm *shm;
+      FAR struct optee_shm *shm = NULL;
 
       switch (mp->attr & OPTEE_MSG_ATTR_TYPE_MASK)
         {
@@ -1562,6 +1562,12 @@ int optee_from_msg_param(FAR struct tee_ioctl_param *params,
           default:
             return -EINVAL;
         }
+#ifndef CONFIG_ARCH_USE_MMU
+          if (shm)
+            {
+              up_invalidate_dcache(shm->vaddr, shm->vaddr + shm->length);
+            }
+#endif
     }
 
   return 0;
@@ -1629,12 +1635,6 @@ int optee_to_msg_param(FAR struct optee_priv_data *priv,
           default:
             return -EINVAL;
         }
-#ifndef CONFIG_ARCH_USE_MMU
-          if (shm)
-            {
-              up_invalidate_dcache(shm->vaddr, shm->vaddr + shm->length);
-            }
-#endif
     }
 
   return 0;
